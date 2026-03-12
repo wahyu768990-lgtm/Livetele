@@ -8,7 +8,7 @@ on:
         required: true
       chat_id:
         description: 'ID Grup Telegram (Gunakan awalan -100... contoh: -100123456789)'
-        required: true
+        required: false
 
 jobs:
   stream:
@@ -40,11 +40,11 @@ jobs:
           from pytgcalls.types import MediaStream
 
           # Mengambil data dari environment (Github Secrets)
-          SESSION = os.environ.get("STRING_SESSION")
-          API_ID = int(os.environ.get("API_ID"))
-          API_HASH = os.environ.get("API_HASH")
+          SESSION = os.environ.get("1BVtsOHABu4d7oTmHXsUhb7ovCiAjbbhuuCIWAioaJFunUqq-SRBjREVwC5JgHOJvclvnvGbqfW3SNj2TOKY2WdzQKurUcHEJictLnN9aIWvlSXLJmXSdQichst3Pm-lKCN8UuDlp2L8Xf2tp0vXHoaU_nMuWdeFZNrY5EUkH35lTE_IsVgFvngG7GqNGdNHzvbxFJswRYl8HwpMvi8AS9umrMgMU0gtyqpb-qjqxm_oGozLiam4HIAmWKcOGAlnd9UGpMvABNE4fEATsoYXMbkpcHt0fFX67sCf7xOpXGaAne7zigOtWfMRUTnTsjeLNi_D3vZ8BQO54lskdHfdBQSyFLZoVjOQ=")
+          API_ID = int(os.environ.get("961780"))
+          API_HASH = os.environ.get("bbbfa43f067e1e8e2fb41f334d32a6a7")
           VIDEO_URL = os.environ.get("VIDEO_URL")
-          CHAT_ID = int(os.environ.get("CHAT_ID"))
+          CHAT_ID = int(os.environ.get("-1003759439331"))
 
           # Inisialisasi Telethon dan PyTgCalls
           app = TelegramClient(StringSession(SESSION), API_ID, API_HASH)
