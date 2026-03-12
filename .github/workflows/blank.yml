@@ -1,4 +1,4 @@
-name: Stream URL to Telegram RTMP (Default Set)
+name: Auto Stream Userbot (Telethon)
 
 on:
   workflow_dispatch:
@@ -6,34 +6,82 @@ on:
       video_url:
         description: 'Direct Link Video (mp4/mkv/m3u8)'
         required: true
-      subtitle_url:
-        description: 'Link Subtitle (.srt / .ass) - Opsional'
-        required: false
+      chat_id:
+        description: 'ID Grup Telegram (Gunakan awalan -100... contoh: -100123456789)'
+        required: true
 
 jobs:
   stream:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Install FFmpeg & Curl
+      - name: Install FFmpeg
         run: |
           sudo apt-get update
-          sudo apt-get install -y ffmpeg curl fonts-dejavu
+          sudo apt-get install -y ffmpeg
 
-      - name: Start Streaming
-        env:
-          DEFAULT_RTMP: "rtmps://dc5-1.rtmp.t.me/s/3759439331:ewdfbhxlMviYmNtJPZtbZg"
-          VIDEO_URL: ${{ github.event.inputs.video_url }}
-          SUB_URL: ${{ github.event.inputs.subtitle_url }}
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Install Dependencies
         run: |
-          # 1. Dasar filter: Paksa scale ke 1080p (16:9) agar Telegram tidak bingung
-          V_FILTER="scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:-1:-1:color=black"
+          pip install telethon pytgcalls
 
-          # 2. Tambahkan subtitle jika ada input URL-nya
-          if [ -n "$SUB_URL" ]; then
-            echo "Downloading subtitle..."
-            curl -L "$SUB_URL" -o "mysub.srt"
-            V_FILTER="$V_FILTER,subtitles=mysub.srt"
+      - name: Create Python Streaming Script
+        run: |
+          cat << 'EOF' > stream.py
+          import os
+          import asyncio
+          from telethon import TelegramClient
+          from telethon.sessions import StringSession
+          from pytgcalls import PyTgCalls
+          from pytgcalls.types import MediaStream
+
+          # Mengambil data dari environment (Github Secrets)
+          SESSION = os.environ.get("STRING_SESSION")
+          API_ID = int(os.environ.get("API_ID"))
+          API_HASH = os.environ.get("API_HASH")
+          VIDEO_URL = os.environ.get("VIDEO_URL")
+          CHAT_ID = int(os.environ.get("CHAT_ID"))
+
+          # Inisialisasi Telethon dan PyTgCalls
+          app = TelegramClient(StringSession(SESSION), API_ID, API_HASH)
+          call = PyTgCalls(app)
+
+          async def main():
+              await app.start()
+              await call.start()
+              print("Userbot berhasil login! Mencoba bergabung ke Obrolan Video...")
+              
+              try:
+                  # Bergabung ke obrolan video di grup dan memutar video
+                  await call.join_group_call(
+                      CHAT_ID,
+                      MediaStream(
+                          VIDEO_URL,
+                          video_flags=MediaStream.Flags.VIDEO
+                      )
+                  )
+                  print("Streaming sedang berjalan! Workflow akan terus menyala...")
+                  # Menahan script agar tidak tertutup otomatis
+                  await asyncio.Event().wait()
+              except Exception as e:
+                  print(f"Terjadi error: {e}")
+
+          # Menjalankan script
+          app.loop.run_until_complete(main())
+          EOF
+
+      - name: Start Bot Streaming
+        env:
+          API_ID: ${{ secrets.API_ID }}
+          API_HASH: ${{ secrets.API_HASH }}
+          STRING_SESSION: ${{ secrets.STRING_SESSION }}
+          VIDEO_URL: ${{ github.event.inputs.video_url }}
+          CHAT_ID: ${{ github.event.inputs.chat_id }}
+        run: python stream.py
           fi
 
           # 3. Tambahkan Watermark TipiStream di pojok kiri atas
