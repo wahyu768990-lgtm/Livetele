@@ -1,0 +1,48 @@
+name: Stream URL to Telegram RTMP (Default Set)
+
+on:
+  workflow_dispatch:
+    inputs:
+      video_url:
+        description: 'Direct Link Video (mp4/mkv/m3u8)'
+        required: true
+      subtitle_url:
+        description: 'Link Subtitle (.srt / .ass) - Opsional'
+        required: false
+
+jobs:
+  stream:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Install FFmpeg & Curl
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg curl fonts-dejavu
+
+      - name: Start Streaming
+        env:
+          # Alamat default yang kamu berikan
+          DEFAULT_RTMP: "rtmps://dc5-1.rtmp.t.me/s/3759439331:ewdfbhxlMviYmNtJPZtbZg"
+          VIDEO_URL: ${{ github.event.inputs.video_url }}
+          SUB_URL: ${{ github.event.inputs.subtitle_url }}
+        run: |
+          V_FILTER="drawtext=text='TipiStream':fontcolor=white:fontsize=14:x=180:y=180"
+
+          if [ -n "$SUB_URL" ]; then
+            echo "Downloading subtitle..."
+            curl -L "$SUB_URL" -o "mysub.srt"
+            V_FILTER="subtitles=mysub.srt,$V_FILTER"
+          fi
+
+          # Menggunakan DEFAULT_RTMP jika secrets.RTMP_URL tidak diisi
+          TARGET_URL="${{ secrets.RTMP_URL }}"
+          if [ -z "$TARGET_URL" ]; then
+            TARGET_URL="$DEFAULT_RTMP"
+          fi
+
+          ffmpeg -re -i "$VIDEO_URL" \
+          -vf "$V_FILTER" \
+          -c:v libx264 -preset veryfast -b:v 2500k \
+          -c:a aac -b:a 128k \
+          -f flv "$TARGET_URL"
