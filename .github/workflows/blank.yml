@@ -11,6 +11,8 @@ on:
 jobs:
   stream:
     runs-on: ubuntu-latest
+    # Set timeout 6 jam (360 menit) agar cukup untuk film durasi panjang
+    timeout-minutes: 360 
 
     steps:
       - name: Install FFmpeg & Telethon
@@ -27,7 +29,8 @@ jobs:
           import asyncio
           import os
           import subprocess
-          from telethon import TelegramClient, functions, types
+          import sys
+          from telethon import TelegramClient, functions
           from telethon.sessions import StringSession
 
           # --- DATA DARI USER ---
@@ -42,52 +45,52 @@ jobs:
               await client.connect()
               
               if not await client.is_user_authorized():
-                  print("Sesi tidak valid!")
+                  print("Sesi tidak valid! Periksa STRING_SESSION.")
                   return
 
-              print(f"Berhasil login! Menyiapkan stream di {TARGET_CHAT}...")
+              print(f"Berhasil login! Mencari chat: {TARGET_CHAT}")
 
               try:
                   entity = await client.get_entity(TARGET_CHAT)
                   
-                  # 1. Pastikan Group Call aktif (RTMP Mode)
+                  # 1. Start/Get Group Call
                   try:
                       await client(functions.phone.CreateGroupCallRequest(
-                          peer=entity,
-                          title="NOBAR",
-                          rtmp_stream=True
+                          peer=entity, title="NOBAR FILM", rtmp_stream=True
                       ))
                       print("Group Call baru dibuat.")
                   except Exception:
-                      print("Group Call sudah ada, mengambil info RTMP...")
+                      print("Group Call sudah ada, lanjut mengambil RTMP...")
 
                   # 2. Ambil detail RTMP
                   call_info = await client(functions.phone.GetGroupCallStreamRtmpUrlRequest(
-                      peer=entity,
-                      revoke=False
+                      peer=entity, revoke=False
                   ))
                   
                   full_rtmp = f"{call_info.url}{call_info.key}"
-                  print(f"RTMP didapat! Memulai FFmpeg...")
+                  print(f"Streaming dimulai ke RTMP URL...")
 
-                  # 3. Filter FFmpeg (1080p Landscape + Watermark)
-                  v_filter = (
-                      "scale=1920:1080:force_original_aspect_ratio=decrease,"
-                      "pad=1920:1080:-1:-1:color=black,"
-                      "drawtext=text='TipiStream':fontcolor=white:fontsize=24:x=30:y=30"
-                  )
-
+                  # 3. Filter & Optimasi FFmpeg
+                  # Ditambahkan reconnect flags agar tidak mudah putus jika server video lambat
                   ffmpeg_cmd = [
-                      "ffmpeg", "-re", "-i", VIDEO_URL,
-                      "-vf", v_filter,
-                      "-c:v", "libx264", "-preset", "veryfast", "-b:v", "3000k", "-pix_fmt", "yuv420p",
-                      "-c:a", "aac", "-b:a", "128k", "-ac", "2",
+                      "ffmpeg", 
+                      "-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "5",
+                      "-re", "-i", VIDEO_URL,
+                      "-vf", "scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:-1:-1:color=black,drawtext=text='TipiStream':fontcolor=white:fontsize=20:x=20:y=20",
+                      "-c:v", "libx264", "-preset", "veryfast", "-b:v", "2500k", "-maxrate", "2500k", "-bufsize", "5000k",
+                      "-pix_fmt", "yuv420p", "-g", "50",
+                      "-c:a", "aac", "-b:a", "128k", "-ar", "44100",
                       "-f", "flv", full_rtmp
                   ]
 
-                  # Jalankan streaming
-                  process = subprocess.Popen(ffmpeg_cmd)
+                  process = subprocess.Popen(ffmpeg_cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, universal_newlines=True)
+                  
+                  # Menampilkan log FFmpeg secara real-time agar workflow tidak dianggap 'stuck'
+                  for line in process.stdout:
+                      print(line, end='')
+
                   process.wait()
+                  print("Film selesai atau FFmpeg berhenti.")
 
               except Exception as e:
                   print(f"Terjadi kesalahan: {e}")
