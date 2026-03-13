@@ -1,0 +1,132 @@
+name: Nobar Stream smrp
+
+on:
+  workflow_dispatch:
+    inputs:
+      video_url:
+        description: 'Direct Link Video'
+        required: true
+        default: 'https://tipigd.tipikug.workers.dev/0:/Me/Pencarian.Terakhir.2025.1080p.NF.WEB-DL.DDP5.1.H.264-KQRM.mkv'
+      custom_rtmp:
+        description: 'Custom RTMP URL (Kosongkan jika ingin auto dari Telegram)'
+        required: false
+        default: ''
+
+jobs:
+  stream:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360 
+
+    steps:
+      - name: Install Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg aria2
+          pip install telethon
+
+      - name: Download Video
+        run: |
+          aria2c -x 16 -s 16 -o "film_lokal.mkv" "${{ github.event.inputs.video_url }}"
+
+      - name: Run Auto Streamer
+        env:
+          API_ID: 27095962
+          API_HASH: '2a6a2a3d4bb616f254325bdc5007496d'
+          STRING_SESSION: '1BVtsOHABu8YLZZ-e0n0HBjd7CZHOtCIreRto5IulVtonWOjACzFNaw2VtcsLyIwserSdDdldwIIxJ0rfKciVSWiWSsEwgvSKJZ4T5Dven4qjp_9n5IwITQjy4nERcjlpzDEO8F6UUuJchb3_L3Gjrck8r0G74GaZVMgP-Ufwf86wklONhtp96-N0sQSKlAVZVn2mdDFd81vjPyfiO5mATUnWJza2jFW-dlbWwXFaQ4HQ2z7y36QWMIfGjfZdk4Svhtv4DqhALDzQ_niujQRvHNRhAWroxeNhyZMPAG2klPfSMeRjsl8wfx3I0k2oVcLFasAZFIy8FFwKZvb6vxC-l01L4spV54c='
+          TARGET_CHAT: 'aiahwhsushe'
+          CUSTOM_RTMP: ${{ github.event.inputs.custom_rtmp }}
+        run: |
+          cat << 'EOF' > streamer.py
+          import asyncio
+          import os
+          import subprocess
+          import re
+          from telethon import TelegramClient, functions
+          from telethon.sessions import StringSession
+
+          API_ID = int(os.environ.get("API_ID"))
+          API_HASH = os.environ.get("API_HASH")
+          STRING_SESSION = os.environ.get("STRING_SESSION")
+          TARGET_CHAT = os.environ.get("TARGET_CHAT")
+          CUSTOM_RTMP = os.environ.get("CUSTOM_RTMP")
+          VIDEO_PATH = "film_lokal.mkv"
+
+          async def main():
+              full_rtmp = None
+              
+              # Cek apakah user input RTMP manual
+              if CUSTOM_RTMP and CUSTOM_RTMP.strip():
+                  print(f"Menggunakan Custom RTMP: {CUSTOM_RTMP}")
+                  full_rtmp = CUSTOM_RTMP
+              else:
+                  print("RTMP Kosong, mencoba mengambil dari Telegram...")
+                  client = TelegramClient(StringSession(STRING_SESSION), API_ID, API_HASH)
+                  await client.connect()
+                  
+                  if not await client.is_user_authorized():
+                      print("Session Invalid")
+                      return
+
+                  try:
+                      entity = await client.get_entity(TARGET_CHAT)
+                      try:
+                          await client(functions.phone.CreateGroupCallRequest(
+                              peer=entity, title="NOBAR FILM", rtmp_stream=True
+                          ))
+                      except Exception:
+                          pass
+
+                      call_info = await client(functions.phone.GetGroupCallStreamRtmpUrlRequest(
+                          peer=entity, revoke=False
+                      ))
+                      full_rtmp = f"{call_info.url}{call_info.key}"
+                      print(f"Berhasil mengambil RTMP Telegram.")
+                  except Exception as e:
+                      print(f"Gagal mengambil RTMP dari Telegram: {e}")
+                      return
+                  finally:
+                      await client.disconnect()
+
+              if not full_rtmp:
+                  print("Error: Tidak ada RTMP URL yang bisa digunakan.")
+                  return
+
+              last_timestamp = "00:00:00"
+
+              while True:
+                  ffmpeg_cmd = [
+                      "ffmpeg", 
+                      "-ss", last_timestamp,
+                      "-re", "-i", VIDEO_PATH,
+                      "-vf", "scale=1280:-2", 
+                      "-c:v", "libx264", "-preset", "veryfast", "-b:v", "2500k", "-maxrate", "2500k", "-bufsize", "5000k",
+                      "-pix_fmt", "yuv420p", "-g", "60",
+                      "-c:a", "aac", "-b:a", "128k", "-ac", "2", "-ar", "44100",
+                      "-f", "flv", full_rtmp
+                  ]
+
+                  process = subprocess.Popen(ffmpeg_cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, universal_newlines=True)
+                  
+                  for line in process.stdout:
+                      match = re.search(r"time=(\d{2}:\d{2}:\d{2})", line)
+                      if match:
+                          last_timestamp = match.group(1)
+                      
+                      if "frame=" in line:
+                          print(f"\rStreaming: {last_timestamp}", end="")
+                      else:
+                          print(line.strip())
+
+                  process.wait()
+
+                  if process.returncode == 0:
+                      print("\nStreaming Selesai.")
+                      break
+                  else:
+                      print(f"\nFFmpeg berhenti dengan error. Restarting dalam 5 detik dari {last_timestamp}...")
+                      await asyncio.sleep(5)
+
+          if __name__ == '__main__':
+              asyncio.run(main())
+          EOF
+          python3 streamer.py
