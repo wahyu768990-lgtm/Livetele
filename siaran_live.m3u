@@ -1,5 +1,5 @@
 #EXTM3U
-#EXTINF : tvg-id="MNCSports3.id" group-title="#1. BRI Super League" tvg-logo="https://i.imgur.com/jmidQG5.png",BRI Super League (Digital)
+#EXTINF : tvg-id="MNCSports3.id" group-title="#1. NONTON BARENG", Streaming (Digital)
 #EXTVLCOPT:http-user-agent=Mozilla/5.0 (iPhone; CPU iPhone OS 17_5_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1
 #EXTVLCOPT:http-referrer=https://player.castr.com/
 https://stream.castr.com/69b34bcea692455c0f3d4de6/live_1a5359801e6b11f18f5c5d66ad5600e2/index.m3u8|Origin=https://player.castr.com&Referer=https://player.castr.com/
