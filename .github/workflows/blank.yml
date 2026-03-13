@@ -31,10 +31,10 @@ jobs:
           from telethon.sessions import StringSession
 
           # --- DATA DARI USER ---
-          API_ID = 961780
-          API_HASH = 'bbbfa43f067e1e8e2fb41f334d32a6a7'
-          STRING_SESSION = '1BVtsOHABu4d7oTmHXsUhb7ovCiAjbbhuuCIWAioaJFunUqq-SRBjREVwC5JgHOJvclvnvGbqfW3SNj2TOKY2WdzQKurUcHEJictLnN9aIWvlSXLJmXSdQichst3Pm-lKCN8UuDlp2L8Xf2tp0vXHoaU_nMuWdeFZNrY5EUkH35lTE_IsVgFvngG7GqNGdNHzvbxFJswRYl8HwpMvi8AS9umrMgMU0gtyqpb-qjqxm_oGozLiam4HIAmWKcOGAlnd9UGpMvABNE4fEATsoYXMbkpcHt0fFX67sCf7xOpXGaAne7zigOtWfMRUTnTsjeLNi_D3vZ8BQO54lskdHfdBQSyFLZoVjOQ='
-          TARGET_CHAT = '@whwhwwiw' 
+          API_ID = 27095962
+          API_HASH = '2a6a2a3d4bb616f254325bdc5007496d'
+          STRING_SESSION = '1BVtsOHABu8YLZZ-e0n0HBjd7CZHOtCIreRto5IulVtonWOjACzFNaw2VtcsLyIwserSdDdldwIIxJ0rfKciVSWiWSsEwgvSKJZ4T5Dven4qjp_9n5IwITQjy4nERcjlpzDEO8F6UUuJchb3_L3Gjrck8r0G74GaZVMgP-Ufwf86wklONhtp96-N0sQSKlAVZVn2mdDFd81vjPyfiO5mATUnWJza2jFW-dlbWwXFaQ4HQ2z7y36QWMIfGjfZdk4Svhtv4DqhALDzQ_niujQRvHNRhAWroxeNhyZMPAG2klPfSMeRjsl8wfx3I0k2oVcLFasAZFIy8FFwKZvb6vxC-l01L4spV54c='
+          TARGET_CHAT = 'aiahwhsushe' 
           VIDEO_URL = os.environ.get("VIDEO_URL")
 
           async def main():
