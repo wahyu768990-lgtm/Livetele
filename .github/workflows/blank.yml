@@ -1,4 +1,4 @@
-name: Auto Nobar Stream (Telethon + FFmpeg)
+name: Auto Nobar Stream (Download First)
 
 on:
   workflow_dispatch:
@@ -11,94 +11,98 @@ on:
 jobs:
   stream:
     runs-on: ubuntu-latest
-    # Timeout 6 jam agar tidak mati otomatis saat film masih jalan
     timeout-minutes: 360 
 
     steps:
-      - name: Install FFmpeg & Telethon
+      - name: Install Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y ffmpeg
+          sudo apt-get install -y ffmpeg aria2
           pip install telethon
+
+      - name: Download Video
+        run: |
+          aria2c -x 16 -s 16 -o "film_lokal.mkv" "${{ github.event.inputs.video_url }}"
 
       - name: Run Auto Streamer
         env:
-          VIDEO_URL: ${{ github.event.inputs.video_url }}
+          API_ID: 27095962
+          API_HASH: '2a6a2a3d4bb616f254325bdc5007496d'
+          STRING_SESSION: '1BVtsOHABu8YLZZ-e0n0HBjd7CZHOtCIreRto5IulVtonWOjACzFNaw2VtcsLyIwserSdDdldwIIxJ0rfKciVSWiWSsEwgvSKJZ4T5Dven4qjp_9n5IwITQjy4nERcjlpzDEO8F6UUuJchb3_L3Gjrck8r0G74GaZVMgP-Ufwf86wklONhtp96-N0sQSKlAVZVn2mdDFd81vjPyfiO5mATUnWJza2jFW-dlbWwXFaQ4HQ2z7y36QWMIfGjfZdk4Svhtv4DqhALDzQ_niujQRvHNRhAWroxeNhyZMPAG2klPfSMeRjsl8wfx3I0k2oVcLFasAZFIy8FFwKZvb6vxC-l01L4spV54c='
+          TARGET_CHAT: 'aiahwhsushe'
         run: |
           cat << 'EOF' > streamer.py
           import asyncio
           import os
           import subprocess
-          import sys
+          import re
           from telethon import TelegramClient, functions
           from telethon.sessions import StringSession
 
-          # --- KONFIGURASI ---
-          API_ID = 27095962
-          API_HASH = '2a6a2a3d4bb616f254325bdc5007496d'
-          STRING_SESSION = '1BVtsOHABu8YLZZ-e0n0HBjd7CZHOtCIreRto5IulVtonWOjACzFNaw2VtcsLyIwserSdDdldwIIxJ0rfKciVSWiWSsEwgvSKJZ4T5Dven4qjp_9n5IwITQjy4nERcjlpzDEO8F6UUuJchb3_L3Gjrck8r0G74GaZVMgP-Ufwf86wklONhtp96-N0sQSKlAVZVn2mdDFd81vjPyfiO5mATUnWJza2jFW-dlbWwXFaQ4HQ2z7y36QWMIfGjfZdk4Svhtv4DqhALDzQ_niujQRvHNRhAWroxeNhyZMPAG2klPfSMeRjsl8wfx3I0k2oVcLFasAZFIy8FFwKZvb6vxC-l01L4spV54c='
-          TARGET_CHAT = 'aiahwhsushe' 
-          VIDEO_URL = os.environ.get("VIDEO_URL")
+          API_ID = int(os.environ.get("API_ID"))
+          API_HASH = os.environ.get("API_HASH")
+          STRING_SESSION = os.environ.get("STRING_SESSION")
+          TARGET_CHAT = os.environ.get("TARGET_CHAT")
+          VIDEO_PATH = "film_lokal.mkv"
 
           async def main():
               client = TelegramClient(StringSession(STRING_SESSION), API_ID, API_HASH)
               await client.connect()
               
               if not await client.is_user_authorized():
-                  print("❌ Sesi tidak valid! Silakan generate ulang String Session.")
+                  print("Session Invalid")
                   return
 
-              print(f"✅ Berhasil login! Menyiapkan stream di: {TARGET_CHAT}")
+              last_timestamp = "00:00:00"
 
               try:
                   entity = await client.get_entity(TARGET_CHAT)
                   
-                  # 1. Pastikan Group Call aktif
                   try:
                       await client(functions.phone.CreateGroupCallRequest(
                           peer=entity, title="NOBAR FILM", rtmp_stream=True
                       ))
-                      print("📢 Group Call baru dimulai.")
                   except Exception:
-                      print("ℹ️ Group Call sudah aktif, mengambil data RTMP...")
+                      pass
 
-                  # 2. Ambil detail RTMP (URL & Key)
                   call_info = await client(functions.phone.GetGroupCallStreamRtmpUrlRequest(
                       peer=entity, revoke=False
                   ))
-                  
                   full_rtmp = f"{call_info.url}{call_info.key}"
-                  print(f"🚀 Memulai FFmpeg streaming...")
 
-                  # 3. Perintah FFmpeg (DIOPTIMASI)
-                  # -ac 2 : Memaksa audio ke Stereo (PENTING untuk Telegram)
-                  # -reconnect : Mencegah stream mati jika internet server video drop sebentar
-                  ffmpeg_cmd = [
-                      "ffmpeg", 
-                      "-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "5",
-                      "-re", "-i", VIDEO_URL,
-                      "-vf", "scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:-1:-1:color=black,drawtext=text='TipiStream':fontcolor=white:fontsize=24:x=30:y=30",
-                      "-c:v", "libx264", "-preset", "veryfast", "-b:v", "2500k", "-maxrate", "2500k", "-bufsize", "5000k",
-                      "-pix_fmt", "yuv420p", "-g", "50",
-                      "-c:a", "aac", "-b:a", "128k", "-ac", "2", "-ar", "44100",
-                      "-f", "flv", full_rtmp
-                  ]
+                  while True:
+                      ffmpeg_cmd = [
+                          "ffmpeg", 
+                          "-ss", last_timestamp,
+                          "-re", "-i", VIDEO_PATH,
+                          "-vf", "scale=1280:-2", 
+                          "-c:v", "libx264", "-preset", "veryfast", "-b:v", "2500k", "-maxrate", "2500k", "-bufsize", "5000k",
+                          "-pix_fmt", "yuv420p", "-g", "60",
+                          "-c:a", "aac", "-b:a", "128k", "-ac", "2", "-ar", "44100",
+                          "-f", "flv", full_rtmp
+                      ]
 
-                  # Jalankan FFmpeg dan tampilkan log ke console GitHub
-                  process = subprocess.Popen(ffmpeg_cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, universal_newlines=True)
-                  
-                  for line in process.stdout:
-                      if "frame=" in line:
-                          # Menampilkan info progres tanpa memenuhi log
-                          print(f"\r{line.strip()}", end="")
+                      process = subprocess.Popen(ffmpeg_cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, universal_newlines=True)
+                      
+                      for line in process.stdout:
+                          match = re.search(r"time=(\d{2}:\d{2}:\d{2})", line)
+                          if match:
+                              last_timestamp = match.group(1)
+                          
+                          if "frame=" in line:
+                              print(f"\rStreaming: {last_timestamp}", end="")
+                          else:
+                              print(line.strip())
+
+                      process.wait()
+
+                      if process.returncode == 0:
+                          break
                       else:
-                          print(line.strip())
-
-                  process.wait()
-                  print("\n🏁 Streaming selesai atau video telah berakhir.")
+                          await asyncio.sleep(5)
 
               except Exception as e:
-                  print(f"❌ Terjadi kesalahan: {e}")
+                  print(f"Error: {e}")
               finally:
                   await client.disconnect()
 
