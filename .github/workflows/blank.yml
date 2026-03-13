@@ -1,4 +1,4 @@
-name: Auto Nobar Stream (Download First)
+name: Nobar Stream 
 
 on:
   workflow_dispatch:
