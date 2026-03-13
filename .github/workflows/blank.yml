@@ -11,7 +11,7 @@ on:
 jobs:
   stream:
     runs-on: ubuntu-latest
-    # Set timeout 6 jam (360 menit) agar cukup untuk film durasi panjang
+    # Timeout 6 jam agar tidak mati otomatis saat film masih jalan
     timeout-minutes: 360 
 
     steps:
@@ -33,7 +33,7 @@ jobs:
           from telethon import TelegramClient, functions
           from telethon.sessions import StringSession
 
-          # --- DATA DARI USER ---
+          # --- KONFIGURASI ---
           API_ID = 27095962
           API_HASH = '2a6a2a3d4bb616f254325bdc5007496d'
           STRING_SESSION = '1BVtsOHABu8YLZZ-e0n0HBjd7CZHOtCIreRto5IulVtonWOjACzFNaw2VtcsLyIwserSdDdldwIIxJ0rfKciVSWiWSsEwgvSKJZ4T5Dven4qjp_9n5IwITQjy4nERcjlpzDEO8F6UUuJchb3_L3Gjrck8r0G74GaZVMgP-Ufwf86wklONhtp96-N0sQSKlAVZVn2mdDFd81vjPyfiO5mATUnWJza2jFW-dlbWwXFaQ4HQ2z7y36QWMIfGjfZdk4Svhtv4DqhALDzQ_niujQRvHNRhAWroxeNhyZMPAG2klPfSMeRjsl8wfx3I0k2oVcLFasAZFIy8FFwKZvb6vxC-l01L4spV54c='
@@ -45,55 +45,60 @@ jobs:
               await client.connect()
               
               if not await client.is_user_authorized():
-                  print("Sesi tidak valid! Periksa STRING_SESSION.")
+                  print("❌ Sesi tidak valid! Silakan generate ulang String Session.")
                   return
 
-              print(f"Berhasil login! Mencari chat: {TARGET_CHAT}")
+              print(f"✅ Berhasil login! Menyiapkan stream di: {TARGET_CHAT}")
 
               try:
                   entity = await client.get_entity(TARGET_CHAT)
                   
-                  # 1. Start/Get Group Call
+                  # 1. Pastikan Group Call aktif
                   try:
                       await client(functions.phone.CreateGroupCallRequest(
                           peer=entity, title="NOBAR FILM", rtmp_stream=True
                       ))
-                      print("Group Call baru dibuat.")
+                      print("📢 Group Call baru dimulai.")
                   except Exception:
-                      print("Group Call sudah ada, lanjut mengambil RTMP...")
+                      print("ℹ️ Group Call sudah aktif, mengambil data RTMP...")
 
-                  # 2. Ambil detail RTMP
+                  # 2. Ambil detail RTMP (URL & Key)
                   call_info = await client(functions.phone.GetGroupCallStreamRtmpUrlRequest(
                       peer=entity, revoke=False
                   ))
                   
                   full_rtmp = f"{call_info.url}{call_info.key}"
-                  print(f"Streaming dimulai ke RTMP URL...")
+                  print(f"🚀 Memulai FFmpeg streaming...")
 
-                  # 3. Filter & Optimasi FFmpeg
-                  # Ditambahkan reconnect flags agar tidak mudah putus jika server video lambat
+                  # 3. Perintah FFmpeg (DIOPTIMASI)
+                  # -ac 2 : Memaksa audio ke Stereo (PENTING untuk Telegram)
+                  # -reconnect : Mencegah stream mati jika internet server video drop sebentar
                   ffmpeg_cmd = [
                       "ffmpeg", 
                       "-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "5",
                       "-re", "-i", VIDEO_URL,
-                      "-vf", "scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:-1:-1:color=black,drawtext=text='TipiStream':fontcolor=white:fontsize=20:x=20:y=20",
+                      "-vf", "scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:-1:-1:color=black,drawtext=text='TipiStream':fontcolor=white:fontsize=24:x=30:y=30",
                       "-c:v", "libx264", "-preset", "veryfast", "-b:v", "2500k", "-maxrate", "2500k", "-bufsize", "5000k",
                       "-pix_fmt", "yuv420p", "-g", "50",
-                      "-c:a", "aac", "-b:a", "128k", "-ar", "44100",
+                      "-c:a", "aac", "-b:a", "128k", "-ac", "2", "-ar", "44100",
                       "-f", "flv", full_rtmp
                   ]
 
+                  # Jalankan FFmpeg dan tampilkan log ke console GitHub
                   process = subprocess.Popen(ffmpeg_cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, universal_newlines=True)
                   
-                  # Menampilkan log FFmpeg secara real-time agar workflow tidak dianggap 'stuck'
                   for line in process.stdout:
-                      print(line, end='')
+                      if "frame=" in line:
+                          # Menampilkan info progres tanpa memenuhi log
+                          print(f"\r{line.strip()}", end="")
+                      else:
+                          print(line.strip())
 
                   process.wait()
-                  print("Film selesai atau FFmpeg berhenti.")
+                  print("\n🏁 Streaming selesai atau video telah berakhir.")
 
               except Exception as e:
-                  print(f"Terjadi kesalahan: {e}")
+                  print(f"❌ Terjadi kesalahan: {e}")
               finally:
                   await client.disconnect()
 
