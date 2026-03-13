@@ -1,14 +1,14 @@
-name: Nobar Stream Pro
+name: Nobar Stream 1080p
 
 on:
   workflow_dispatch:
     inputs:
       video_url:
-        description: 'Direct Link Video (MKV/MP4)'
+        description: 'Direct Link Video'
         required: true
         default: 'https://tipigd.tipikug.workers.dev/0:/Me/Pencarian.Terakhir.2025.1080p.NF.WEB-DL.DDP5.1.H.264-KQRM.mkv'
       custom_rtmp:
-        description: 'Custom RTMP URL (Kosongkan jika ingin auto ke Telegram)'
+        description: 'Custom RTMP URL'
         required: false
         default: ''
 
@@ -26,7 +26,6 @@ jobs:
 
       - name: Download Video
         run: |
-          # Menggunakan aria2 agar download lebih ngebut
           aria2c -x 16 -s 16 -o "film_lokal.mkv" "${{ github.event.inputs.video_url }}"
 
       - name: Run Auto Streamer
@@ -52,95 +51,47 @@ jobs:
           CUSTOM_RTMP = os.environ.get("CUSTOM_RTMP")
           VIDEO_PATH = "film_lokal.mkv"
 
-          async def get_rtmp_link():
+          async def get_rtmp():
               if CUSTOM_RTMP and CUSTOM_RTMP.strip():
-                  print(f"--- MENGGUNAKAN CUSTOM RTMP: {CUSTOM_RTMP} ---")
                   return CUSTOM_RTMP
-              
-              print("--- MENGAMBIL RTMP DARI TELEGRAM ---")
               client = TelegramClient(StringSession(STRING_SESSION), API_ID, API_HASH)
               await client.connect()
-              
-              if not await client.is_user_authorized():
-                  print("Error: Session Telegram Invalid!")
-                  return None
-
               try:
                   entity = await client.get_entity(TARGET_CHAT)
-                  try:
-                      # Mencoba membuat call baru jika belum ada
-                      await client(functions.phone.CreateGroupCallRequest(
-                          peer=entity, title="NOBAR FILM", rtmp_stream=True
-                      ))
-                  except Exception:
-                      pass
-
-                  call_info = await client(functions.phone.GetGroupCallStreamRtmpUrlRequest(
-                      peer=entity, revoke=False
-                  ))
-                  return f"{call_info.url}{call_info.key}"
-              except Exception as e:
-                  print(f"Error Telethon: {e}")
-                  return None
-              finally:
-                  await client.disconnect()
+                  try: await client(functions.phone.CreateGroupCallRequest(peer=entity, title="NOBAR 1080p", rtmp_stream=True))
+                  except: pass
+                  call = await client(functions.phone.GetGroupCallStreamRtmpUrlRequest(peer=entity, revoke=False))
+                  return f"{call.url}{call.key}"
+              finally: await client.disconnect()
 
           async def main():
-              full_rtmp = await get_rtmp_link()
-              if not full_rtmp:
-                  return
-
-              last_timestamp = "00:00:00"
-
+              full_rtmp = await get_rtmp()
+              if not full_rtmp: return
+              
+              last_ts = "00:00:00"
               while True:
-                  # FFmpeg Command dengan Perbaikan Audio
                   ffmpeg_cmd = [
-                      "ffmpeg", 
-                      "-ss", last_timestamp,      # Resume dari detik terakhir jika terputus
-                      "-re",                      # Baca file secara Realtime
-                      "-i", VIDEO_PATH,
-                      "-map", "0:v:0",            # Paksa ambil track video pertama
-                      "-map", "0:a:0",            # Paksa ambil track audio pertama
-                      "-vf", "scale=1280:-2",     # Resize ke 720p (hemat bandwidth)
-                      "-c:v", "libx264", 
-                      "-preset", "veryfast", 
-                      "-b:v", "2500k", 
-                      "-maxrate", "2500k", 
-                      "-bufsize", "5000k",
-                      "-pix_fmt", "yuv420p", 
-                      "-g", "60",                 # Keyframe interval
-                      "-c:a", "aac",              # Convert audio ke AAC
-                      "-b:a", "128k", 
-                      "-ac", "2",                 # FIX: Downmix 5.1 ke Stereo (2 Channel) agar suara muncul
-                      "-ar", "44100", 
-                      "-af", "aresample=async=1", # Sinkronisasi Audio-Video
-                      "-f", "flv", 
-                      full_rtmp
+                      "ffmpeg", "-ss", last_ts, "-re", "-i", VIDEO_PATH,
+                      "-map", "0:v:0", "-map", "0:a:0",
+                      "-vf", "scale=1920:-2",           # UBAH KE 1080p
+                      "-c:v", "libx264", "-preset", "veryfast", 
+                      "-b:v", "5000k",                  # NAIKKAN BITRATE (BIAR JERNIH)
+                      "-maxrate", "5000k", "-bufsize", "10000k",
+                      "-pix_fmt", "yuv420p", "-g", "60",
+                      "-c:a", "aac", "-b:a", "160k", "-ac", "2", "-ar", "44100",
+                      "-af", "aresample=async=1",
+                      "-f", "flv", full_rtmp
                   ]
-
-                  process = subprocess.Popen(ffmpeg_cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, universal_newlines=True)
                   
-                  for line in process.stdout:
-                      # Ambil log timestamp untuk fitur auto-resume
+                  proc = subprocess.Popen(ffmpeg_cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, universal_newlines=True)
+                  for line in proc.stdout:
                       match = re.search(r"time=(\d{2}:\d{2}:\d{2})", line)
-                      if match:
-                          last_timestamp = match.group(1)
-                      
-                      if "frame=" in line:
-                          print(f"\rStreaming di posisi: {last_timestamp}", end="")
-                      else:
-                          # Print log lain jika penting (error dsb)
-                          if "Error" in line or "failed" in line:
-                              print(f"\nLog: {line.strip()}")
-
-                  process.wait()
-
-                  if process.returncode == 0:
-                      print("\n--- Film Selesai Ditayangkan ---")
-                      break
-                  else:
-                      print(f"\n--- Koneksi Terputus. Mencoba Reconnecting dari {last_timestamp}... ---")
-                      await asyncio.sleep(5)
+                      if match: last_ts = match.group(1)
+                      if "frame=" in line: print(f"\rStreaming 1080p: {last_ts}", end="")
+                  
+                  proc.wait()
+                  if proc.returncode == 0: break
+                  await asyncio.sleep(5)
 
           if __name__ == '__main__':
               asyncio.run(main())
