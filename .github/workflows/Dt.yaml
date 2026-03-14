@@ -1,4 +1,4 @@
-name: Nobar Stream 1080p (Direct & Drive)
+name: Nobar Stream 1080p (Fixed Drive)
 
 on:
   workflow_dispatch:
@@ -24,38 +24,58 @@ jobs:
           sudo apt-get install -y ffmpeg aria2
           pip install telethon requests
 
-      - name: Download Video
+      - name: Download Video (With 5MB Test)
         run: |
           python3 - << 'EOF'
-          import os, re, requests, sys
+          import os, re, requests
+
           url = "${{ github.event.inputs.video_url }}"
           filename = "film_lokal.mkv"
-
-          def download_gdrive(file_id):
-              print(f"Mendeteksi Link Google Drive: {file_id}")
-              session = requests.Session()
+          session = requests.Session()
+          
+          # 1. Deteksi ID Drive
+          drive_match = re.search(r'(?:id=|\/d\/|folders\/)([a-zA-Z0-9_-]{25,})', url)
+          
+          if "drive.google.com" in url and drive_match:
+              file_id = drive_match.group(1)
+              print(f"🚀 GDrive ID Terdeteksi: {file_id}")
+              
+              # Hit URL awal untuk pancing cookie & token
               base_url = "https://drive.google.com/uc?export=download"
               res = session.get(base_url, params={'id': file_id})
               
+              # Cari token 'confirm' (seperti value='t' di HTML-mu)
               confirm_token = ""
               for key, value in session.cookies.get_dict().items():
                   if key.startswith("download_warning"):
                       confirm_token = value
               
-              cookie_str = "; ".join([f"{k}={v}" for k, v in session.cookies.get_dict().items()])
-              download_url = f"{base_url}&confirm={confirm_token}&id={file_id}"
-              
-              cmd = f'aria2c -x 16 -s 16 -j 5 --header="Cookie: {cookie_str}" "{download_url}" -o "{filename}"'
-              os.system(cmd)
+              if not confirm_token:
+                  match = re.search(r'name="confirm" value="([^"]+)"', res.text)
+                  confirm_token = match.group(1) if match else "t"
 
-          # Cek apakah link Google Drive
-          drive_match = re.search(r'(?:id=|\/d\/|folders\/)([a-zA-Z0-9_-]{25,})', url)
-          
-          if "drive.google.com" in url and drive_match:
-              download_gdrive(drive_match.group(1))
+              download_url = f"https://drive.usercontent.google.com/download?id={file_id}&export=download&confirm={confirm_token}"
           else:
-              print("Mendeteksi Direct Link...")
-              os.system(f'aria2c -x 16 -s 16 "{url}" -o "{filename}"')
+              download_url = url
+              print("🔗 Menggunakan Direct Link...")
+
+          # 2. TEST DOWNLOAD 5MB (Biar gak zonk)
+          print("🛠️ Testing download 5MB pertama...")
+          with session.get(download_url, stream=True) as r:
+              r.raise_for_status()
+              with open(filename, 'wb') as f:
+                  downloaded = 0
+                  for chunk in r.iter_content(chunk_size=8192):
+                      if chunk:
+                          f.write(chunk)
+                          downloaded += len(chunk)
+                          if downloaded >= 5 * 1024 * 1024: break
+          print("✅ Test 5MB Berhasil!")
+
+          # 3. LANJUT PAKAI ARIA2 (Full Speed)
+          cookie_str = "; ".join([f"{k}={v}" for k, v in session.cookies.get_dict().items()])
+          print("🚀 Melanjutkan sisa download dengan Aria2c...")
+          os.system(f'aria2c -c -x 16 -s 16 -j 5 --header="Cookie: {cookie_str}" "{download_url}" -o "{filename}"')
           EOF
 
       - name: Run Auto Streamer
@@ -68,13 +88,13 @@ jobs:
           from telethon import TelegramClient, functions
           from telethon.sessions import StringSession
 
-          # --- ISI DATA KAMU DI SINI ---
+          # --- DATA LOGIN ---
           API_ID = 27095962
           API_HASH = '2a6a2a3d4bb616f254325bdc5007496d'
           STRING_SESSION = '1BVtsOHABu8YLZZ-e0n0HBjd7CZHOtCIreRto5IulVtonWOjACzFNaw2VtcsLyIwserSdDdldwIIxJ0rfKciVSWiWSsEwgvSKJZ4T5Dven4qjp_9n5IwITQjy4nERcjlpzDEO8F6UUuJchb3_L3Gjrck8r0G74GaZVMgP-Ufwf86wklONhtp96-N0sQSKlAVZVn2mdDFd81vjPyfiO5mATUnWJza2jFW-dlbWwXFaQ4HQ2z7y36QWMIfGjfZdk4Svhtv4DqhALDzQ_niujQRvHNRhAWroxeNhyZMPAG2klPfSMeRjsl8wfx3I0k2oVcLFasAZFIy8FFwKZvb6vxC-l01L4spV54c='
           TARGET_CHAT = 'aiahwhsushe'
           CUSTOM_RTMP = "${{ github.event.inputs.custom_rtmp }}"
-          # ---------------------------
+          # ------------------
 
           VIDEO_PATH = "film_lokal.mkv"
 
@@ -95,6 +115,7 @@ jobs:
               full_rtmp = await get_rtmp()
               if not full_rtmp: return
               
+              print(f"Streaming dimulai...")
               last_ts = "00:00:00"
               while True:
                   ffmpeg_cmd = [
@@ -102,8 +123,7 @@ jobs:
                       "-map", "0:v:0", "-map", "0:a:0",
                       "-vf", "scale=1920:-2",
                       "-c:v", "libx264", "-preset", "veryfast", 
-                      "-b:v", "5000k",
-                      "-maxrate", "5000k", "-bufsize", "10000k",
+                      "-b:v", "5000k", "-maxrate", "5000k", "-bufsize", "10000k",
                       "-pix_fmt", "yuv420p", "-g", "60",
                       "-c:a", "aac", "-b:a", "160k", "-ac", "2", "-ar", "44100",
                       "-af", "aresample=async=1",
@@ -114,7 +134,7 @@ jobs:
                   for line in proc.stdout:
                       match = re.search(r"time=(\d{2}:\d{2}:\d{2})", line)
                       if match: last_ts = match.group(1)
-                      if "frame=" in line: print(f"\rStreaming 1080p: {last_ts}", end="")
+                      if "frame=" in line: print(f"\rStatus: Streaming 1080p | Time: {last_ts}", end="")
                   
                   proc.wait()
                   if proc.returncode == 0: break
