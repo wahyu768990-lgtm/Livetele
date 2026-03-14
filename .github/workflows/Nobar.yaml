@@ -1,4 +1,4 @@
-Name: Nobar Stream Ultimate (Pro Metadata Notification)
+name: Nobar Stream Ultimate (Pro Metadata Notification)
 
 on:
   workflow_dispatch:
