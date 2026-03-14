@@ -30,7 +30,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y ffmpeg aria2
-          pip install telethon requests
+          pip install telethon requests gdown
 
       - name: Smart Download & Auto Streamer
         env:
@@ -76,33 +76,18 @@ jobs:
           if STREAM_METHOD == "download_first":
               filename = "film_lokal.mkv"
               VIDEO_INPUT = filename
-              session = requests.Session()
 
               drive_match = re.search(r'(?:id=|\/d\/|folders\/)([a-zA-Z0-9_-]{25,})', VIDEO_URL)
               if drive_match:
                   file_id = drive_match.group(1)
-                  print(f"🚀 GDrive ID Terdeteksi: {file_id}")
-
-                  base_url = "https://drive.google.com/uc?export=download"
-                  res = session.get(base_url, params={'id': file_id})
-
-                  confirm_token = ""
-                  for key, value in session.cookies.get_dict().items():
-                      if key.startswith("download_warning"):
-                          confirm_token = value
-
-                  if not confirm_token:
-                      match = re.search(r'name="confirm" value="([^"]+)"', res.text)
-                      confirm_token = match.group(1) if match else "t"
-
-                  download_url = f"https://drive.usercontent.google.com/download?id={file_id}&export=download&confirm={confirm_token}"
+                  print(f"🚀 GDrive ID Terdeteksi: {file_id}. Memulai download dengan gdown...")
+                  # Use gdown for direct download
+                  os.system(f'gdown "{VIDEO_URL}" -O "{filename}" --fuzzy')
               else:
                   download_url = VIDEO_URL
+                  print(f"🚀 Memulai download dengan Aria2c ke {filename}...")
+                  os.system(f'aria2c -c -x 16 -s 16 -j 5 "{download_url}" -o "{filename}"')
 
-              # Download dengan Aria2c
-              cookie_str = "; ".join([f"{k}={v}" for k, v in session.cookies.get_dict().items()])
-              print(f"🚀 Memulai download dengan Aria2c ke {filename}...")
-              os.system(f'aria2c -c -x 16 -s 16 -j 5 --header="Cookie: {cookie_str}" "{download_url}" -o "{filename}"')
               print("✅ Download selesai!")
 
           def get_video_metadata():
@@ -112,6 +97,8 @@ jobs:
                   "-show_format", "-show_streams", VIDEO_INPUT
               ]
               
+              title = "Tidak diketahui"
+              quality = "Tidak diketahui"
               meta_info = "Tidak diketahui"
               duration_info = "Tidak diketahui"
               
@@ -119,16 +106,38 @@ jobs:
                   res = subprocess.run(cmd, capture_output=True, text=True)
                   data = json.loads(res.stdout)
                   
+                  format_info = data.get('format', {})
+                  tags = format_info.get('tags', {})
+
+                  # Try to get title from metadata, fallback to filename if missing
+                  title = tags.get('title')
+                  if not title:
+                      # use VIDEO_INPUT filename if title is not present
+                      title = os.path.basename(VIDEO_INPUT)
+
                   video_streams = [s for s in data.get('streams', []) if s.get('codec_type') == 'video']
                   if video_streams:
                       best_stream = sorted(video_streams, key=lambda x: x.get('width', 0), reverse=True)[0]
                       
                       width = best_stream.get('width', '?')
-                      height = best_stream.get('height', '?')
+                      height = best_stream.get('height', 0)
                       codec = best_stream.get('codec_name', '?').upper()
                       meta_info = f"{width}x{height} ({codec})"
+
+                      if isinstance(height, int):
+                          if height >= 2160:
+                              quality = "4K UHD"
+                          elif height >= 1080:
+                              quality = "1080p FHD"
+                          elif height >= 720:
+                              quality = "720p HD"
+                          elif height >= 480:
+                              quality = "480p SD"
+                          elif height >= 360:
+                              quality = "360p SD"
+                          else:
+                              quality = f"{height}p"
                   
-                  format_info = data.get('format', {})
                   duration = float(format_info.get('duration', 0))
                   if duration > 0:
                       m, s = divmod(int(duration), 60)
@@ -138,7 +147,7 @@ jobs:
               except Exception as e:
                   print(f"Gagal mengambil metadata: {e}")
                   
-              return meta_info, duration_info
+              return title, quality, meta_info, duration_info
 
           async def get_rtmp():
               full_rtmp = CUSTOM_RTMP
@@ -159,11 +168,13 @@ jobs:
                   if not full_rtmp:
                       return None
                       
-                  meta_info, duration_info = get_video_metadata()
+                  title, quality, meta_info, duration_info = get_video_metadata()
                   
                   pesan = (
                       f"🎬 **STREAMING DIMULAI** 🎬\n\n"
-                      f"🎥 **Resolusi Asli:** `{meta_info}`\n"
+                      f"🎥 **Judul:** `{title}`\n"
+                      f"📺 **Kualitas Asli:** `{quality}`\n"
+                      f"🔍 **Resolusi Detail:** `{meta_info}`\n"
                       f"⏱ **Durasi:** `{duration_info}`\n"
                       f"⚙️ **Kualitas Output:** `{'1080p (Max 5000kbps)' if QUALITY == '1080p' else 'Menyesuaikan Sumber (Max 4000kbps)'}`\n\n"
                       f"🍿 *Selamat menonton! Jangan lupa siapkan camilan.*"
