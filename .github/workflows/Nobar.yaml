@@ -7,14 +7,6 @@ on:
         description: 'Direct Link, Link Google Drive, atau M3U8'
         required: true
         default: ''
-      stream_method:
-        description: 'Metode Streaming'
-        required: true
-        type: choice
-        options:
-          - 'download_first'
-          - 'direct_stream'
-        default: 'direct_stream'
       quality:
         description: 'Kualitas Video'
         required: true
@@ -40,60 +32,7 @@ jobs:
           sudo apt-get install -y ffmpeg aria2
           pip install telethon requests
 
-      - name: Download Video (Jika metode download_first)
-        if: github.event.inputs.stream_method == 'download_first'
-        run: |
-          python3 - << 'EOF'
-          import os, re, requests
-
-          url = "${{ github.event.inputs.video_url }}"
-          filename = "film_lokal.mkv"
-          session = requests.Session()
-
-          # Deteksi ID Drive
-          drive_match = re.search(r'(?:id=|\/d\/|folders\/)([a-zA-Z0-9_-]{25,})', url)
-
-          if "drive.google.com" in url and drive_match:
-              file_id = drive_match.group(1)
-              print(f"🚀 GDrive ID Terdeteksi: {file_id}")
-
-              base_url = "https://drive.google.com/uc?export=download"
-              res = session.get(base_url, params={'id': file_id})
-
-              confirm_token = ""
-              for key, value in session.cookies.get_dict().items():
-                  if key.startswith("download_warning"):
-                      confirm_token = value
-
-              if not confirm_token:
-                  match = re.search(r'name="confirm" value="([^"]+)"', res.text)
-                  confirm_token = match.group(1) if match else "t"
-
-              download_url = f"https://drive.usercontent.google.com/download?id={file_id}&export=download&confirm={confirm_token}"
-          else:
-              download_url = url
-              print("🔗 Menggunakan Direct Link...")
-
-          # Test 5MB
-          print("🛠️ Testing download 5MB pertama...")
-          with session.get(download_url, stream=True) as r:
-              r.raise_for_status()
-              with open(filename, 'wb') as f:
-                  downloaded = 0
-                  for chunk in r.iter_content(chunk_size=8192):
-                      if chunk:
-                          f.write(chunk)
-                          downloaded += len(chunk)
-                          if downloaded >= 5 * 1024 * 1024: break
-          print("✅ Test 5MB Berhasil!")
-
-          # Pakai Aria2
-          cookie_str = "; ".join([f"{k}={v}" for k, v in session.cookies.get_dict().items()])
-          print("🚀 Melanjutkan sisa download dengan Aria2c...")
-          os.system(f'aria2c -c -x 16 -s 16 -j 5 --header="Cookie: {cookie_str}" "{download_url}" -o "{filename}"')
-          EOF
-
-      - name: Run Auto Streamer
+      - name: Smart Download & Auto Streamer
         env:
           API_ID: 27095962
           API_HASH: '2a6a2a3d4bb616f254325bdc5007496d'
@@ -101,7 +40,6 @@ jobs:
           TARGET_CHAT: 'aiahwhsushe'
           CUSTOM_RTMP: ${{ github.event.inputs.custom_rtmp }}
           VIDEO_URL: ${{ github.event.inputs.video_url }}
-          STREAM_METHOD: ${{ github.event.inputs.stream_method }}
           QUALITY: ${{ github.event.inputs.quality }}
         run: |
           cat << 'EOF' > streamer.py
@@ -110,6 +48,7 @@ jobs:
           import subprocess
           import re
           import json
+          import requests
           from telethon import TelegramClient, functions
           from telethon.sessions import StringSession
 
@@ -119,10 +58,52 @@ jobs:
           TARGET_CHAT = os.environ.get("TARGET_CHAT")
           CUSTOM_RTMP = os.environ.get("CUSTOM_RTMP")
           VIDEO_URL = os.environ.get("VIDEO_URL")
-          STREAM_METHOD = os.environ.get("STREAM_METHOD")
           QUALITY = os.environ.get("QUALITY")
 
-          VIDEO_INPUT = "film_lokal.mkv" if STREAM_METHOD == 'download_first' else VIDEO_URL
+          # Smart Detection
+          STREAM_METHOD = "direct_stream"
+          if ".m3u8" in VIDEO_URL.lower():
+              print("🔍 Deteksi: Link M3U8. Menggunakan metode Direct Stream.")
+              STREAM_METHOD = "direct_stream"
+          elif "drive.google.com" in VIDEO_URL or re.search(r'(?:id=|\/d\/|folders\/)([a-zA-Z0-9_-]{25,})', VIDEO_URL):
+              print("🔍 Deteksi: Link Google Drive. Menggunakan metode Download First.")
+              STREAM_METHOD = "download_first"
+          else:
+              print("🔍 Deteksi: Direct Link / MP4 / MKV. Menggunakan metode Download First.")
+              STREAM_METHOD = "download_first"
+
+          VIDEO_INPUT = VIDEO_URL
+          if STREAM_METHOD == "download_first":
+              filename = "film_lokal.mkv"
+              VIDEO_INPUT = filename
+              session = requests.Session()
+
+              drive_match = re.search(r'(?:id=|\/d\/|folders\/)([a-zA-Z0-9_-]{25,})', VIDEO_URL)
+              if drive_match:
+                  file_id = drive_match.group(1)
+                  print(f"🚀 GDrive ID Terdeteksi: {file_id}")
+
+                  base_url = "https://drive.google.com/uc?export=download"
+                  res = session.get(base_url, params={'id': file_id})
+
+                  confirm_token = ""
+                  for key, value in session.cookies.get_dict().items():
+                      if key.startswith("download_warning"):
+                          confirm_token = value
+
+                  if not confirm_token:
+                      match = re.search(r'name="confirm" value="([^"]+)"', res.text)
+                      confirm_token = match.group(1) if match else "t"
+
+                  download_url = f"https://drive.usercontent.google.com/download?id={file_id}&export=download&confirm={confirm_token}"
+              else:
+                  download_url = VIDEO_URL
+
+              # Download dengan Aria2c
+              cookie_str = "; ".join([f"{k}={v}" for k, v in session.cookies.get_dict().items()])
+              print(f"🚀 Memulai download dengan Aria2c ke {filename}...")
+              os.system(f'aria2c -c -x 16 -s 16 -j 5 --header="Cookie: {cookie_str}" "{download_url}" -o "{filename}"')
+              print("✅ Download selesai!")
 
           def get_video_metadata():
               print("Mengambil metadata video...")
