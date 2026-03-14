@@ -6,7 +6,7 @@ on:
       video_url:
         description: 'Direct Link, Link Google Drive, atau M3U8'
         required: true
-        default: ''
+        default: 'https://drive.google.com/uc?id=1ddFW6aV5dJxhV2wdfmEFf4K48d4G9MFA&export=download'
       quality:
         description: 'Kualitas Video'
         required: true
@@ -30,7 +30,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y ffmpeg aria2
-          pip install telethon requests gdown
+          pip install telethon requests
 
       - name: Smart Download & Auto Streamer
         env:
@@ -49,6 +49,8 @@ jobs:
           import re
           import json
           import requests
+          from pathlib import Path
+          from urllib.parse import urlparse, unquote
           from telethon import TelegramClient, functions
           from telethon.sessions import StringSession
 
@@ -60,151 +62,203 @@ jobs:
           VIDEO_URL = os.environ.get("VIDEO_URL")
           QUALITY = os.environ.get("QUALITY")
 
-          # Smart Detection
           STREAM_METHOD = "direct_stream"
+          VIDEO_INPUT = VIDEO_URL
+          IS_LOCAL_FILE = False
+
+          def sanitize_filename(name):
+              name = re.sub(r'[\\/:*?"<>|]+', ' ', name)
+              name = re.sub(r'\s+', ' ', name).strip()
+              return name or "film_lokal"
+
+          def guess_title_from_url(url):
+              parsed = urlparse(url)
+              name = Path(unquote(parsed.path)).stem
+              return sanitize_filename(name if name else "Unknown Title")
+
+          def get_drive_direct_url(video_url):
+              session = requests.Session()
+              drive_match = re.search(r'(?:id=|\/d\/|folders\/)([a-zA-Z0-9_-]{25,})', video_url)
+              if drive_match:
+                  file_id = drive_match.group(1)
+                  base_url = "https://drive.google.com/uc?export=download"
+                  res = session.get(base_url, params={'id': file_id})
+
+                  confirm_token = ""
+                  for key, value in session.cookies.get_dict().items():
+                      if key.startswith("download_warning"):
+                          confirm_token = value
+
+                  if not confirm_token:
+                      match = re.search(r'name="confirm" value="([^"]+)"', res.text)
+                      confirm_token = match.group(1) if match else "t"
+
+                  uuid_match = re.search(r'name="uuid" value="([^"]+)"', res.text)
+                  uuid = uuid_match.group(1) if uuid_match else ""
+
+                  if uuid:
+                      return f"https://drive.usercontent.google.com/download?id={file_id}&export=download&confirm={confirm_token}&uuid={uuid}", session.cookies.get_dict()
+                  else:
+                      return f"https://drive.usercontent.google.com/download?id={file_id}&export=download&confirm={confirm_token}", session.cookies.get_dict()
+
+              return video_url, {}
+
           if ".m3u8" in VIDEO_URL.lower():
               print("🔍 Deteksi: Link M3U8. Menggunakan metode Direct Stream.")
               STREAM_METHOD = "direct_stream"
-          elif "drive.google.com" in VIDEO_URL or re.search(r'(?:id=|\/d\/|folders\/)([a-zA-Z0-9_-]{25,})', VIDEO_URL):
+          elif "drive.google.com" in VIDEO_URL or "drive.usercontent.google.com" in VIDEO_URL or re.search(r'(?:id=|\/d\/|folders\/)([a-zA-Z0-9_-]{25,})', VIDEO_URL):
               print("🔍 Deteksi: Link Google Drive. Menggunakan metode Download First.")
               STREAM_METHOD = "download_first"
           else:
               print("🔍 Deteksi: Direct Link / MP4 / MKV. Menggunakan metode Download First.")
               STREAM_METHOD = "download_first"
 
-          VIDEO_INPUT = VIDEO_URL
           if STREAM_METHOD == "download_first":
               filename = "film_lokal.mkv"
               VIDEO_INPUT = filename
+              IS_LOCAL_FILE = True
 
-              drive_match = re.search(r'(?:id=|\/d\/|folders\/)([a-zA-Z0-9_-]{25,})', VIDEO_URL)
-              if drive_match:
-                  file_id = drive_match.group(1)
-                  print(f"🚀 GDrive ID Terdeteksi: {file_id}. Memulai download dengan gdown...")
-                  # Use gdown for direct download
-                  os.system(f'gdown "{VIDEO_URL}" -O "{filename}" --fuzzy')
+              if "drive.google.com" in VIDEO_URL or "drive.usercontent.google.com" in VIDEO_URL:
+                  download_url, cookies = get_drive_direct_url(VIDEO_URL)
               else:
-                  download_url = VIDEO_URL
-                  print(f"🚀 Memulai download dengan Aria2c ke {filename}...")
-                  os.system(f'aria2c -c -x 16 -s 16 -j 5 "{download_url}" -o "{filename}"')
+                  download_url, cookies = VIDEO_URL, {}
 
+              cookie_str = "; ".join([f"{k}={v}" for k, v in cookies.items()])
+              print(f"🚀 Memulai download dengan Aria2c ke {filename}...")
+              
+              cmd = [
+                  "aria2c",
+                  "-c",
+                  "-x", "16",
+                  "-s", "16",
+                  "-j", "5",
+                  "--summary-interval=0",
+                  "--auto-file-renaming=false",
+                  "-o", filename,
+                  download_url
+              ]
+
+              if cookie_str:
+                  cmd.insert(-2, f'--header=Cookie: {cookie_str}')
+
+              subprocess.run(cmd, check=True)
               print("✅ Download selesai!")
 
           def get_video_metadata():
-              print("Mengambil metadata video...")
+              print("📦 Mengambil metadata video...")
               cmd = [
                   "ffprobe", "-v", "quiet", "-print_format", "json",
                   "-show_format", "-show_streams", VIDEO_INPUT
               ]
-              
-              title = "Tidak diketahui"
-              quality = "Tidak diketahui"
+
+              title_info = guess_title_from_url(VIDEO_URL)
               meta_info = "Tidak diketahui"
               duration_info = "Tidak diketahui"
-              
+              quality_info = "Unknown"
+
               try:
                   res = subprocess.run(cmd, capture_output=True, text=True)
                   data = json.loads(res.stdout)
-                  
-                  format_info = data.get('format', {})
-                  tags = format_info.get('tags', {})
-
-                  # Try to get title from metadata, fallback to filename if missing
-                  title = tags.get('title')
-                  if not title:
-                      # use VIDEO_INPUT filename if title is not present
-                      title = os.path.basename(VIDEO_INPUT)
 
                   video_streams = [s for s in data.get('streams', []) if s.get('codec_type') == 'video']
                   if video_streams:
-                      best_stream = sorted(video_streams, key=lambda x: x.get('width', 0), reverse=True)[0]
-                      
+                      best_stream = sorted(video_streams, key=lambda x: x.get('height', 0), reverse=True)[0]
+
                       width = best_stream.get('width', '?')
-                      height = best_stream.get('height', 0)
+                      height = best_stream.get('height', '?')
                       codec = best_stream.get('codec_name', '?').upper()
                       meta_info = f"{width}x{height} ({codec})"
 
                       if isinstance(height, int):
-                          if height >= 2160:
-                              quality = "4K UHD"
-                          elif height >= 1080:
-                              quality = "1080p FHD"
-                          elif height >= 720:
-                              quality = "720p HD"
-                          elif height >= 480:
-                              quality = "480p SD"
-                          elif height >= 360:
-                              quality = "360p SD"
-                          else:
-                              quality = f"{height}p"
-                  
+                          quality_info = f"{height}p"
+                      else:
+                          quality_info = "Unknown"
+
+                  format_info = data.get('format', {})
                   duration = float(format_info.get('duration', 0))
                   if duration > 0:
                       m, s = divmod(int(duration), 60)
                       h, m = divmod(m, 60)
                       duration_info = f"{h:02d}:{m:02d}:{s:02d}"
-                      
+
+                  ff_title = format_info.get('tags', {}).get('title')
+                  if ff_title and ff_title.strip():
+                      title_info = sanitize_filename(ff_title.strip())
+                  elif IS_LOCAL_FILE:
+                      title_info = sanitize_filename(Path(VIDEO_INPUT).stem)
+
               except Exception as e:
-                  print(f"Gagal mengambil metadata: {e}")
-                  
-              return title, quality, meta_info, duration_info
+                  print(f"⚠️ Gagal mengambil metadata: {e}")
+
+              return title_info, meta_info, duration_info, quality_info
 
           async def get_rtmp():
               full_rtmp = CUSTOM_RTMP
               client = TelegramClient(StringSession(STRING_SESSION), API_ID, API_HASH)
               await client.connect()
-              
+
               try:
+                  title_info, meta_info, duration_info, quality_info = get_video_metadata()
+
                   if not (full_rtmp and full_rtmp.strip()):
                       entity = await client.get_entity(TARGET_CHAT)
-                      try: 
-                          title = "NOBAR 1080p" if QUALITY == '1080p' else "NOBAR (Auto HD)"
-                          await client(functions.phone.CreateGroupCallRequest(peer=entity, title=title, rtmp_stream=True))
-                      except: 
+                      try:
+                          call_title = f"{title_info} | {quality_info}"
+                          await client(functions.phone.CreateGroupCallRequest(
+                              peer=entity,
+                              title=call_title[:120],
+                              rtmp_stream=True
+                          ))
+                      except:
                           pass
+
                       call = await client(functions.phone.GetGroupCallStreamRtmpUrlRequest(peer=entity, revoke=False))
                       full_rtmp = f"{call.url}{call.key}"
-                  
+
                   if not full_rtmp:
                       return None
-                      
-                  title, quality, meta_info, duration_info = get_video_metadata()
-                  
+
+                  output_quality_text = "Mengikuti kualitas sumber" if QUALITY == "auto" else "1080p (forced output max)"
+
                   pesan = (
                       f"🎬 **STREAMING DIMULAI** 🎬\n\n"
-                      f"🎥 **Judul:** `{title}`\n"
-                      f"📺 **Kualitas Asli:** `{quality}`\n"
-                      f"🔍 **Resolusi Detail:** `{meta_info}`\n"
+                      f"🏷 **Judul:** `{title_info}`\n"
+                      f"🎥 **Resolusi Sumber:** `{meta_info}`\n"
+                      f"📺 **Kualitas Sumber:** `{quality_info}`\n"
                       f"⏱ **Durasi:** `{duration_info}`\n"
-                      f"⚙️ **Kualitas Output:** `{'1080p (Max 5000kbps)' if QUALITY == '1080p' else 'Menyesuaikan Sumber (Max 4000kbps)'}`\n\n"
+                      f"⚙️ **Kualitas Output:** `{output_quality_text}`\n\n"
                       f"🍿 *Selamat menonton! Jangan lupa siapkan camilan.*"
                   )
                   await client.send_message(TARGET_CHAT, pesan)
-                  print("Pesan notifikasi berhasil dikirim!")
-                  
+                  print("✅ Pesan notifikasi berhasil dikirim!")
+
               except Exception as e:
-                  print(f"Ada kendala saat setup/kirim pesan: {e}")
+                  print(f"⚠️ Ada kendala saat setup/kirim pesan: {e}")
               finally:
                   await client.disconnect()
-                  
+
               return full_rtmp
 
           async def main():
               full_rtmp = await get_rtmp()
-              if not full_rtmp: 
-                  print("Gagal mendapatkan RTMP URL. Berhenti.")
+              if not full_rtmp:
+                  print("❌ Gagal mendapatkan RTMP URL. Berhenti.")
                   return
-              
-              print(f"Streaming dimulai...")
+
+              print("🚀 Streaming dimulai...")
               last_ts = "00:00:00"
+
               while True:
-                  ffmpeg_cmd = [
-                      "ffmpeg", "-ss", last_ts, "-re", "-i", VIDEO_INPUT,
-                  ]
-                  
+                  ffmpeg_cmd = ["ffmpeg"]
+
+                  if IS_LOCAL_FILE:
+                      ffmpeg_cmd.extend(["-ss", last_ts])
+
+                  ffmpeg_cmd.extend(["-re", "-i", VIDEO_INPUT])
+
                   if QUALITY == '1080p':
                       ffmpeg_cmd.extend([
-                          "-map", "0:v:0", "-map", "0:a:0",
+                          "-map", "0:v:0", "-map", "0:a:0?",
                           "-vf", "scale=1920:-2",
                           "-c:v", "libx264", "-preset", "veryfast",
                           "-b:v", "5000k", "-maxrate", "5000k", "-bufsize", "10000k",
@@ -214,6 +268,7 @@ jobs:
                       ])
                   else:
                       ffmpeg_cmd.extend([
+                          "-map", "0:v:0", "-map", "0:a:0?",
                           "-c:v", "libx264", "-preset", "veryfast",
                           "-b:v", "3500k", "-maxrate", "4000k", "-bufsize", "8000k",
                           "-pix_fmt", "yuv420p", "-g", "60",
@@ -223,14 +278,25 @@ jobs:
 
                   ffmpeg_cmd.extend(["-f", "flv", full_rtmp])
 
-                  proc = subprocess.Popen(ffmpeg_cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, universal_newlines=True)
+                  proc = subprocess.Popen(
+                      ffmpeg_cmd,
+                      stdout=subprocess.PIPE,
+                      stderr=subprocess.STDOUT,
+                      universal_newlines=True
+                  )
+
                   for line in proc.stdout:
                       match = re.search(r"time=(\d{2}:\d{2}:\d{2})", line)
-                      if match: last_ts = match.group(1)
-                      if "frame=" in line: print(f"\rStatus: Streaming {QUALITY} | Time: {last_ts}", end="")
-                  
+                      if match:
+                          last_ts = match.group(1)
+                      if "frame=" in line:
+                          print(f"\rStatus: Streaming {QUALITY} | Time: {last_ts}", end="")
+
                   proc.wait()
-                  if proc.returncode == 0: break
+                  if proc.returncode == 0:
+                      break
+
+                  print(f"\n⚠️ FFmpeg berhenti dengan code {proc.returncode}, mencoba lanjut dari {last_ts}...")
                   await asyncio.sleep(5)
 
           if __name__ == '__main__':
