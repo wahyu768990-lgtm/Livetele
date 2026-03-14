@@ -1,4 +1,4 @@
-Name: Nobar Stream All-in-One (With Subtitle)
+name: Nobar Stream All-in-One (With Subtitle)
 
 on:
   workflow_dispatch:
