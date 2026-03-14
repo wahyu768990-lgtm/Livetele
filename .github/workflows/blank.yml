@@ -1,4 +1,4 @@
-name: Nobar Stream 1080p
+name: Nobar Stream Auto HD
 
 on:
   workflow_dispatch:
@@ -29,7 +29,7 @@ jobs:
           API_ID: 27095962
           API_HASH: '2a6a2a3d4bb616f254325bdc5007496d'
           STRING_SESSION: '1BVtsOHABu8YLZZ-e0n0HBjd7CZHOtCIreRto5IulVtonWOjACzFNaw2VtcsLyIwserSdDdldwIIxJ0rfKciVSWiWSsEwgvSKJZ4T5Dven4qjp_9n5IwITQjy4nERcjlpzDEO8F6UUuJchb3_L3Gjrck8r0G74GaZVMgP-Ufwf86wklONhtp96-N0sQSKlAVZVn2mdDFd81vjPyfiO5mATUnWJza2jFW-dlbWwXFaQ4HQ2z7y36QWMIfGjfZdk4Svhtv4DqhALDzQ_niujQRvHNRhAWroxeNhyZMPAG2klPfSMeRjsl8wfx3I0k2oVcLFasAZFIy8FFwKZvb6vxC-l01L4spV54c='
-          TARGET_CHAT: 'ahusiluam'
+          TARGET_CHAT: 'aiahwhsushe'
           CUSTOM_RTMP: ${{ github.event.inputs.custom_rtmp }}
           VIDEO_URL: ${{ github.event.inputs.video_url }}
         run: |
@@ -38,6 +38,7 @@ jobs:
           import os
           import subprocess
           import re
+          import json
           from telethon import TelegramClient, functions
           from telethon.sessions import StringSession
 
@@ -46,37 +47,94 @@ jobs:
           STRING_SESSION = os.environ.get("STRING_SESSION")
           TARGET_CHAT = os.environ.get("TARGET_CHAT")
           CUSTOM_RTMP = os.environ.get("CUSTOM_RTMP")
-          VIDEO_URL = os.environ.get("VIDEO_URL") # Mengambil URL langsung dari environment
+          VIDEO_URL = os.environ.get("VIDEO_URL")
 
-          async def get_rtmp():
-              if CUSTOM_RTMP and CUSTOM_RTMP.strip():
-                  return CUSTOM_RTMP
+          def get_video_metadata():
+              print("Mengambil metadata video...")
+              cmd = [
+                  "ffprobe", "-v", "quiet", "-print_format", "json",
+                  "-show_format", "-show_streams", VIDEO_URL
+              ]
+              
+              meta_info = "Tidak diketahui"
+              duration_info = "Tidak diketahui"
+              
+              try:
+                  res = subprocess.run(cmd, capture_output=True, text=True)
+                  data = json.loads(res.stdout)
+                  
+                  video_streams = [s for s in data.get('streams', []) if s.get('codec_type') == 'video']
+                  if video_streams:
+                      best_stream = sorted(video_streams, key=lambda x: x.get('width', 0), reverse=True)[0]
+                      
+                      width = best_stream.get('width', '?')
+                      height = best_stream.get('height', '?')
+                      codec = best_stream.get('codec_name', '?').upper()
+                      meta_info = f"{width}x{height} ({codec})"
+                  
+                  format_info = data.get('format', {})
+                  duration = float(format_info.get('duration', 0))
+                  if duration > 0:
+                      m, s = divmod(int(duration), 60)
+                      h, m = divmod(m, 60)
+                      duration_info = f"{h:02d}:{m:02d}:{s:02d}"
+                      
+              except Exception as e:
+                  print(f"Gagal mengambil metadata: {e}")
+                  
+              return meta_info, duration_info
+
+          async def setup_and_notify():
+              full_rtmp = CUSTOM_RTMP
               client = TelegramClient(StringSession(STRING_SESSION), API_ID, API_HASH)
               await client.connect()
+              
               try:
-                  entity = await client.get_entity(TARGET_CHAT)
-                  try: await client(functions.phone.CreateGroupCallRequest(peer=entity, title="NOBAR 1080p", rtmp_stream=True))
-                  except: pass
-                  call = await client(functions.phone.GetGroupCallStreamRtmpUrlRequest(peer=entity, revoke=False))
-                  return f"{call.url}{call.key}"
-              finally: await client.disconnect()
+                  if not (full_rtmp and full_rtmp.strip()):
+                      entity = await client.get_entity(TARGET_CHAT)
+                      try: 
+                          await client(functions.phone.CreateGroupCallRequest(peer=entity, title="NOBAR (Auto HD)", rtmp_stream=True))
+                      except: 
+                          pass
+                      call = await client(functions.phone.GetGroupCallStreamRtmpUrlRequest(peer=entity, revoke=False))
+                      full_rtmp = f"{call.url}{call.key}"
+                  
+                  if not full_rtmp:
+                      return None
+                      
+                  meta_info, duration_info = get_video_metadata()
+                  
+                  pesan = (
+                      f"🎬 **STREAMING DIMULAI** 🎬\n\n"
+                      f"🎥 **Resolusi Asli:** `{meta_info}` (Auto Terpilih)\n"
+                      f"⏱ **Durasi:** `{duration_info}`\n"
+                      f"⚙️ **Kualitas Output:** `Menyesuaikan Sumber (Max 4000kbps)`\n\n"
+                      f"🍿 *Selamat menonton! Jangan lupa siapkan camilan.*"
+                  )
+                  await client.send_message(TARGET_CHAT, pesan)
+                  print("Pesan notifikasi berhasil dikirim!")
+                  
+              except Exception as e:
+                  print(f"Ada kendala saat setup/kirim pesan: {e}")
+              finally:
+                  await client.disconnect()
+                  
+              return full_rtmp
 
           async def main():
-              full_rtmp = await get_rtmp()
-              if not full_rtmp: return
+              full_rtmp = await setup_and_notify()
+              if not full_rtmp: 
+                  print("Gagal mendapatkan RTMP URL. Berhenti.")
+                  return
               
               last_ts = "00:00:00"
               while True:
-                  # Mengganti VIDEO_PATH menjadi VIDEO_URL di command ffmpeg
                   ffmpeg_cmd = [
                       "ffmpeg", "-ss", last_ts, "-re", "-i", VIDEO_URL,
-                      "-map", "0:v:0", "-map", "0:a:0",
-                      "-vf", "scale=1920:-2",           # UBAH KE 1080p
                       "-c:v", "libx264", "-preset", "veryfast", 
-                      "-b:v", "5000k",                  # NAIKKAN BITRATE (BIAR JERNIH)
-                      "-maxrate", "5000k", "-bufsize", "10000k",
+                      "-b:v", "3500k", "-maxrate", "4000k", "-bufsize", "8000k",
                       "-pix_fmt", "yuv420p", "-g", "60",
-                      "-c:a", "aac", "-b:a", "160k", "-ac", "2", "-ar", "44100",
+                      "-c:a", "aac", "-b:a", "128k", "-ac", "2", "-ar", "44100",
                       "-af", "aresample=async=1",
                       "-f", "flv", full_rtmp
                   ]
@@ -85,7 +143,7 @@ jobs:
                   for line in proc.stdout:
                       match = re.search(r"time=(\d{2}:\d{2}:\d{2})", line)
                       if match: last_ts = match.group(1)
-                      if "frame=" in line: print(f"\rStreaming 1080p: {last_ts}", end="")
+                      if "frame=" in line: print(f"\rStreaming Auto HD: {last_ts}", end="")
                   
                   proc.wait()
                   if proc.returncode == 0: break
