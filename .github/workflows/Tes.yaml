@@ -1,4 +1,4 @@
-name: Nobar Stream Pro (Auto Filename & Font Support)
+name: Nobar Stream Ultimate (Auto Subtitle Extraction)
 
 on:
   workflow_dispatch:
@@ -35,7 +35,7 @@ jobs:
           sudo apt-get install -y ffmpeg aria2
           pip install telethon requests
 
-      - name: Smart Download, Font Extract & Stream
+      - name: Smart Download, Subtitle Extract & Stream
         env:
           API_ID: 27095962
           API_HASH: '2a6a2a3d4bb616f254325bdc5007496d'
@@ -68,129 +68,136 @@ jobs:
           USE_SUBTITLE = os.environ.get("USE_SUBTITLE", "false").lower() == "true"
 
           FONTS_DIR = "fonts_extracted"
-          VIDEO_FILENAME = "film_lokal.mp4" # Default
+          SUB_FILE = "selected_sub.ass"
+          VIDEO_FILENAME = "film_lokal.mp4"
 
-          def sanitize_filename(name):
-              return re.sub(r'[\\/:*?"<>|]+', ' ', name).strip()
-
-          def get_drive_direct_url(video_url):
-              session = requests.Session()
-              drive_match = re.search(r'(?:id=|\/d\/)([a-zA-Z0-9_-]{25,})', video_url)
-              if drive_match:
-                  file_id = drive_match.group(1)
-                  base_url = "https://drive.google.com/uc?export=download"
-                  res = session.get(base_url, params={'id': file_id}, allow_redirects=True)
-                  confirm_token = next((v for k, v in session.cookies.get_dict().items() if k.startswith("download_warning")), "")
-                  if not confirm_token:
-                      match = re.search(r'name="confirm" value="([^"]+)"', res.text)
-                      confirm_token = match.group(1) if match else "t"
-                  return (f"https://drive.usercontent.google.com/download?id={file_id}&export=download&confirm={confirm_token}", session.cookies.get_dict())
-              return video_url, {}
+          def sanitize(name): return re.sub(r'[\\/:*?"<>|]+', ' ', name).strip()
 
           def get_filename_and_url(url):
               final_url = url
               filename = "video_stream"
               cookies = {}
-
-              if "drive.google.com" in url or "drive.usercontent.google.com" in url:
-                  final_url, cookies = get_drive_direct_url(url)
               
+              # Drive Link Handling
+              drive_match = re.search(r'(?:id=|\/d\/)([a-zA-Z0-9_-]{25,})', url)
+              if drive_match:
+                  file_id = drive_match.group(1)
+                  base_url = "https://drive.google.com/uc?export=download"
+                  session = requests.Session()
+                  res = session.get(base_url, params={'id': file_id})
+                  token = next((v for k,v in session.cookies.get_dict().items() if k.startswith("download_warning")), "")
+                  if not token:
+                      match = re.search(r'name="confirm" value="([^"]+)"', res.text)
+                      token = match.group(1) if match else "t"
+                  final_url = f"https://drive.usercontent.google.com/download?id={file_id}&export=download&confirm={token}"
+                  cookies = session.cookies.get_dict()
+
               try:
                   with requests.get(final_url, cookies=cookies, stream=True, allow_redirects=True, timeout=10) as r:
-                      # Deteksi Content-Disposition
                       cd = r.headers.get('content-disposition')
                       if cd:
                           fname = re.findall('filename="(.+?)"', cd)
                           if not fname: fname = re.findall("filename\*=UTF-8''(.+)", cd)
                           if fname: filename = unquote(fname[0])
                       else:
-                          # Fallback ke URL path
                           filename = Path(unquote(urlparse(r.url).path)).name or "video_stream"
-              except Exception as e:
-                  print(f"⚠️ Gagal deteksi filename: {e}")
+              except: pass
               
-              filename = sanitize_filename(filename)
-              # Pastikan punya ekstensi
-              if not Path(filename).suffix:
-                  filename += ".mp4"
-              
+              filename = sanitize(filename)
+              if not Path(filename).suffix: filename += ".mp4"
               return filename, final_url, cookies
 
-          # 1. Download Setup
+          # 1. Start Process
           if ".m3u8" in VIDEO_URL.lower():
               VIDEO_INPUT = VIDEO_URL
-              IS_LOCAL_FILE = False
-              print(f"🔍 Streaming dari Link M3U8")
+              IS_LOCAL = False
           else:
               VIDEO_FILENAME, DL_URL, COOKIES = get_filename_and_url(VIDEO_URL)
               VIDEO_INPUT = VIDEO_FILENAME
-              IS_LOCAL_FILE = True
-              
-              print(f"🚀 Detected Filename: {VIDEO_FILENAME}")
-              cookie_str = "; ".join([f"{k}={v}" for k, v in COOKIES.items()])
-              
-              cmd = ["aria2c", "-c", "-x", "16", "-s", "16", "-j", "5", "--auto-file-renaming=false", "-o", VIDEO_FILENAME, DL_URL]
-              if cookie_str: cmd.insert(1, f"--header=Cookie: {cookie_str}")
+              IS_LOCAL = True
+              print(f"📦 Downloading: {VIDEO_FILENAME}")
+              c_str = "; ".join([f"{k}={v}" for k, v in COOKIES.items()])
+              cmd = ["aria2c", "-c", "-x", "16", "-s", "16", "-j", "5", "-o", VIDEO_FILENAME, DL_URL]
+              if c_str: cmd.insert(1, f"--header=Cookie: {c_str}")
               subprocess.run(cmd, check=True)
 
-          # 2. Font Extraction (Ham's Trick)
-          def extract_fonts(input_file):
-              if not input_file.lower().endswith(".mkv"): return None
-              os.makedirs(FONTS_DIR, exist_ok=True)
-              print("🎨 MKV Detected. Extracting fonts...")
-              subprocess.run(["ffmpeg", "-dump_attachment:t", "", "-i", f"../{input_file}"], cwd=FONTS_DIR, stderr=subprocess.DEVNULL)
-              return os.path.abspath(FONTS_DIR)
-
-          def get_metadata():
-              cmd = ["ffprobe", "-v", "quiet", "-print_format", "json", "-show_format", "-show_streams", VIDEO_INPUT]
+          def get_stream_data():
+              cmd = ["ffprobe", "-v", "quiet", "-print_format", "json", "-show_streams", VIDEO_INPUT]
               res = subprocess.run(cmd, capture_output=True, text=True)
               data = json.loads(res.stdout)
-              meta = {"title": VIDEO_FILENAME, "sub_idx": -1, "has_fonts": False}
+              
+              info = {"sub_stream_idx": -1, "has_fonts": False, "sub_codec": "ass"}
               
               if USE_SUBTITLE:
-                  subs = [s for s in data.get("streams", []) if s.get("codec_type") == "subtitle"]
-                  for i, s in enumerate(subs):
+                  sub_streams = [s for s in data.get("streams", []) if s.get("codec_type") == "subtitle"]
+                  for i, s in enumerate(sub_streams):
                       tags = s.get("tags", {})
                       lang, title = tags.get("language", "").lower(), tags.get("title", "").lower()
                       if any(x in lang for x in ["ind", "id"]) or any(x in title for x in ["indo", "indonesia"]):
-                          meta["sub_idx"] = i # index relatif filter subtitle
+                          info["sub_stream_idx"] = s['index'] # Index absolut FFmpeg
+                          info["sub_codec"] = s.get("codec_name", "ass")
+                          print(f"✅ Found Indo Sub at Stream #{s['index']}")
                           break
               
               if any(s.get("codec_type") == "attachment" for s in data.get("streams", [])):
-                  meta["has_fonts"] = True
-              return meta
+                  info["has_fonts"] = True
+              return info
 
           async def main():
-              meta = get_metadata()
-              font_path = extract_fonts(VIDEO_INPUT) if meta["has_fonts"] else None
+              info = get_stream_data()
+              font_path = None
               
+              # Extract Fonts
+              if info["has_fonts"] and IS_LOCAL:
+                  os.makedirs(FONTS_DIR, exist_ok=True)
+                  print("🎨 Extracting fonts...")
+                  subprocess.run(["ffmpeg", "-dump_attachment:t", "", "-i", f"../{VIDEO_INPUT}"], cwd=FONTS_DIR, stderr=subprocess.DEVNULL)
+                  font_path = os.path.abspath(FONTS_DIR)
+
+              # Extract Subtitle (INI KUNCINYA)
+              if info["sub_stream_idx"] != -1 and IS_LOCAL:
+                  print(f"📝 Extracting Subtitle Stream #{info['sub_stream_idx']}...")
+                  ext = "ass" if "ass" in info["sub_codec"] or "ssa" in info["sub_codec"] else "srt"
+                  target_sub = f"sub.{ext}"
+                  # Hapus file lama jika ada
+                  if os.path.exists(target_sub): os.remove(target_sub)
+                  # Ekstrak track subtitle spesifik ke file terpisah
+                  subprocess.run(["ffmpeg", "-y", "-i", VIDEO_INPUT, "-map", f"0:{info['sub_stream_idx']}", target_sub], stderr=subprocess.DEVNULL)
+                  if os.path.exists(target_sub):
+                      global SUB_FILE
+                      SUB_FILE = target_sub
+                  else:
+                      info["sub_stream_idx"] = -1
+
+              # Telegram Session
               client = TelegramClient(StringSession(STRING_SESSION), API_ID, API_HASH)
               await client.connect()
-              
               full_rtmp = CUSTOM_RTMP
               if not full_rtmp:
                   entity = await client.get_entity(TARGET_CHAT)
-                  try: await client(functions.phone.CreateGroupCallRequest(peer=entity, title=meta["title"], rtmp_stream=True))
+                  try: await client(functions.phone.CreateGroupCallRequest(peer=entity, title=VIDEO_FILENAME, rtmp_stream=True))
                   except: pass
                   call = await client(functions.phone.GetGroupCallStreamRtmpUrlRequest(peer=entity, revoke=False))
                   full_rtmp = f"{call.url}{call.key}"
-
-              await client.send_message(TARGET_CHAT, f"🎬 **STREAMING STARTED**\n🏷 `{meta['title']}`\n💬 Subtitle: `{'Indonesia' if meta['sub_idx'] != -1 else 'None'}`\n🎨 Custom Fonts: `{'Yes' if font_path else 'No'}`")
+              
+              await client.send_message(TARGET_CHAT, f"🎬 **STREAM STARTED**\n🏷 `{VIDEO_FILENAME}`\n💬 Subtitle: `{'Indonesia' if info['sub_stream_idx'] != -1 else 'None'}`")
               await client.disconnect()
 
+              # FFmpeg Stream
               last_ts = "00:00:00"
               while True:
                   vf = []
                   if QUALITY == "1080p": vf.append("scale=1920:-2")
                   
-                  if meta["sub_idx"] != -1:
-                      # Menggunakan index si=X sesuai stream subtitle yang ketemu
-                      sub_f = f"subtitles='{VIDEO_INPUT}':si={meta['sub_idx']}"
-                      if font_path: sub_f += f":fontsdir='{font_path}'"
-                      vf.append(sub_f)
+                  # Burn Subtitle dari file hasil ekstrak
+                  if info["sub_stream_idx"] != -1 and IS_LOCAL:
+                      # Format: subtitles=sub.ass:fontsdir='./fonts'
+                      sub_cmd = f"subtitles={SUB_FILE}"
+                      if font_path: sub_cmd += f":fontsdir='{font_path}'"
+                      vf.append(sub_cmd)
 
                   cmd = ["ffmpeg", "-y", "-re"]
-                  if IS_LOCAL_FILE and last_ts != "00:00:00": cmd.extend(["-ss", last_ts])
+                  if IS_LOCAL and last_ts != "00:00:00": cmd.extend(["-ss", last_ts])
                   cmd.extend(["-i", VIDEO_INPUT])
                   if vf: cmd.extend(["-vf", ",".join(vf)])
                   
@@ -202,10 +209,10 @@ jobs:
                   for line in proc.stdout:
                       t = re.search(r"time=(\d{2}:\d{2}:\d{2})", line)
                       if t: last_ts = t.group(1)
-                      if "frame=" in line: print(f"\rStreaming: {last_ts} | Subs: {meta['sub_idx']}", end="")
+                      if "frame=" in line: print(f"\rStreaming: {last_ts}", end="")
                   
                   if proc.wait() == 0: break
-                  print(f"\n⚠️ Reconnecting..."); await asyncio.sleep(5)
+                  await asyncio.sleep(5)
 
           if __name__ == '__main__':
               asyncio.run(main())
