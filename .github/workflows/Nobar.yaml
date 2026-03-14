@@ -29,7 +29,7 @@ jobs:
       - name: Install Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y ffmpeg aria2
+          sudo apt-get install -y ffmpeg
           pip install telethon requests
 
       - name: Smart Download & Auto Streamer
@@ -123,26 +123,17 @@ jobs:
               else:
                   download_url, cookies = VIDEO_URL, {}
 
-              cookie_str = "; ".join([f"{k}={v}" for k, v in cookies.items()])
-              print(f"🚀 Memulai download dengan Aria2c ke {filename}...")
+              print(f"🚀 Memulai download dengan Requests ke {filename}...")
               
-              cmd = [
-                  "aria2c",
-                  "-c",
-                  "-x", "16",
-                  "-s", "16",
-                  "-j", "5",
-                  "--summary-interval=0",
-                  "--auto-file-renaming=false",
-                  "-o", filename,
-                  download_url
-              ]
-
-              if cookie_str:
-                  cmd.insert(-1, f'--header=Cookie: {cookie_str}')
-
-              subprocess.run(cmd, check=True)
-              print("✅ Download selesai!")
+              try:
+                  with requests.get(download_url, cookies=cookies, stream=True) as r:
+                      r.raise_for_status()
+                      with open(filename, 'wb') as f:
+                          for chunk in r.iter_content(chunk_size=8192):
+                              f.write(chunk)
+                  print("✅ Download selesai!")
+              except Exception as e:
+                  print(f"❌ Gagal mendownload file: {e}")
 
           def get_video_metadata():
               print("📦 Mengambil metadata video...")
