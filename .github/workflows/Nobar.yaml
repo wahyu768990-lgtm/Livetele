@@ -1,4 +1,4 @@
-name: Nobar Stream Ultimate (Auto Subtitle Extraction)
+Name: Nobar Stream Ultimate (Pro Metadata Notification)
 
 on:
   workflow_dispatch:
@@ -80,228 +80,147 @@ jobs:
               return re.sub(r'[\\/:*?"<>|]+', ' ', name).strip()
 
           def ffmpeg_escape_filter_path(path: str) -> str:
-              return (
-                  path.replace("\\", "\\\\")
-                      .replace(":", r"\:")
-                      .replace("'", r"\'")
-                      .replace("[", r"\[")
-                      .replace("]", r"\]")
-                      .replace(",", r"\,")
-              )
+              return path.replace("\\", "\\\\").replace(":", r"\:").replace("'", r"\'").replace("[", r"\[").replace("]", r"\]").replace(",", r"\,")
 
           def get_filename_and_url(url):
-              final_url = url
-              filename = "video_stream"
-              cookies = {}
-
-              # Drive Link Handling
+              final_url, filename, cookies = url, "video_stream", {}
               drive_match = re.search(r'(?:id=|\/d\/)([a-zA-Z0-9_-]{25,})', url)
               if drive_match:
                   file_id = drive_match.group(1)
-                  base_url = "https://drive.google.com/uc?export=download"
                   session = requests.Session()
-                  res = session.get(base_url, params={'id': file_id})
+                  res = session.get("https://drive.google.com/uc?export=download", params={'id': file_id})
                   token = next((v for k, v in session.cookies.get_dict().items() if k.startswith("download_warning")), "")
                   if not token:
-                      match = re.search(r'name="confirm" value="([^"]+)"', res.text)
-                      token = match.group(1) if match else "t"
+                      m = re.search(r'name="confirm" value="([^"]+)"', res.text)
+                      token = m.group(1) if m else "t"
                   final_url = f"https://drive.usercontent.google.com/download?id={file_id}&export=download&confirm={token}"
                   cookies = session.cookies.get_dict()
-
               try:
                   with requests.get(final_url, cookies=cookies, stream=True, allow_redirects=True, timeout=10) as r:
                       cd = r.headers.get('content-disposition')
                       if cd:
                           fname = re.findall('filename="(.+?)"', cd)
-                          if not fname:
-                              fname = re.findall("filename\\*=UTF-8''(.+)", cd)
-                          if fname:
-                              filename = unquote(fname[0])
+                          if fname: filename = unquote(fname[0])
                       else:
                           filename = Path(unquote(urlparse(r.url).path)).name or "video_stream"
-              except:
-                  pass
-
+              except: pass
               filename = sanitize(filename)
-              if not Path(filename).suffix:
-                  filename += ".mp4"
+              if not Path(filename).suffix: filename += ".mp4"
               return filename, final_url, cookies
 
-          # 1. Start Process
           if ".m3u8" in VIDEO_URL.lower():
-              VIDEO_INPUT = VIDEO_URL
-              IS_LOCAL = False
+              VIDEO_INPUT, IS_LOCAL = VIDEO_URL, False
           else:
               VIDEO_FILENAME, DL_URL, COOKIES = get_filename_and_url(VIDEO_URL)
-              VIDEO_INPUT = VIDEO_FILENAME
-              IS_LOCAL = True
+              VIDEO_INPUT, IS_LOCAL = VIDEO_FILENAME, True
               print(f"📦 Downloading: {VIDEO_FILENAME}")
               c_str = "; ".join([f"{k}={v}" for k, v in COOKIES.items()])
               cmd = ["aria2c", "-c", "-x", "16", "-s", "16", "-j", "5", "-o", VIDEO_FILENAME, DL_URL]
-              if c_str:
-                  cmd.insert(1, f"--header=Cookie: {c_str}")
+              if c_str: cmd.insert(1, f"--header=Cookie: {c_str}")
               subprocess.run(cmd, check=True)
 
           def get_stream_data():
-              cmd = ["ffprobe", "-v", "quiet", "-print_format", "json", "-show_streams", VIDEO_INPUT]
+              cmd = ["ffprobe", "-v", "quiet", "-print_format", "json", "-show_format", "-show_streams", VIDEO_INPUT]
               res = subprocess.run(cmd, capture_output=True, text=True)
               data = json.loads(res.stdout or "{}")
-
+              
               info = {
-                  "sub_stream_idx": -1,   # absolute stream index
-                  "sub_rel_idx": -1,      # relative subtitle index untuk subtitles=:si=
-                  "has_fonts": False,
-                  "sub_codec": "ass"
+                  "sub_rel_idx": -1, "has_fonts": False, 
+                  "res": "Tidak diketahui", "dur": "Tidak diketahui", "src_q": "Unknown"
               }
-
               streams = data.get("streams", [])
+              
+              # Video Info
+              v_streams = [s for s in streams if s.get("codec_type") == "video"]
+              if v_streams:
+                  v = sorted(v_streams, key=lambda x: x.get("height", 0), reverse=True)[0]
+                  info["res"] = f"{v.get('width')}x{v.get('height')}"
+                  info["src_q"] = f"{v.get('height')}p"
+              
+              # Duration Info
+              d_raw = data.get("format", {}).get("duration")
+              if d_raw:
+                  sec = int(float(d_raw))
+                  info["dur"] = f"{sec//3600:02d}:{(sec%3600)//60:02d}:{sec%60:02d}"
+
+              if any(s.get("codec_type") == "attachment" for s in streams): info["has_fonts"] = True
+              
               sub_streams = [s for s in streams if s.get("codec_type") == "subtitle"]
-
-              if any(s.get("codec_type") == "attachment" for s in streams):
-                  info["has_fonts"] = True
-
-              print("\n=== STREAM INFO ===")
-              for s in streams:
-                  tags = s.get("tags", {}) or {}
-                  print(
-                      f"index={s.get('index')} "
-                      f"type={s.get('codec_type')} "
-                      f"codec={s.get('codec_name')} "
-                      f"lang={tags.get('language', '-')} "
-                      f"title={tags.get('title', '-')}"
-                  )
-
-              if USE_SUBTITLE:
-                  print("\n=== SUBTITLE TRACK LIST ===")
-                  for rel_idx, s in enumerate(sub_streams):
-                      tags = s.get("tags", {}) or {}
-                      lang = (tags.get("language") or "").lower()
-                      title = (tags.get("title") or "").lower()
-                      codec = s.get("codec_name", "unknown")
-                      abs_idx = s.get("index")
-                      print(f"[track {rel_idx}] abs={abs_idx} codec={codec} lang={lang or '-'} title={title or '-'}")
-
-                  # Manual select: subtitle_track = 0/1/2/...
+              if USE_SUBTITLE and sub_streams:
                   if SUBTITLE_TRACK != "auto":
                       try:
-                          wanted = int(SUBTITLE_TRACK)
-                          if 0 <= wanted < len(sub_streams):
-                              s = sub_streams[wanted]
-                              info["sub_rel_idx"] = wanted
-                              info["sub_stream_idx"] = s["index"]
-                              info["sub_codec"] = s.get("codec_name", "ass")
-                              print(f"✅ Manual subtitle selected: track {wanted} (abs #{s['index']})")
-                              return info
-                          else:
-                              print(f"⚠️ SUBTITLE_TRACK={wanted} di luar range. Fallback ke auto.")
-                      except:
-                          print("⚠️ SUBTITLE_TRACK tidak valid. Fallback ke auto.")
-
-                  # Auto detect subtitle Indonesia
-                  for rel_idx, s in enumerate(sub_streams):
+                          idx = int(SUBTITLE_TRACK)
+                          if 0 <= idx < len(sub_streams): info["sub_rel_idx"] = idx; return info
+                      except: pass
+                  
+                  fk = ["wibusubs", "kusonime", "oploverz", "anoboy", "sentaisubs", "moesubs"]
+                  for i, s in enumerate(sub_streams):
                       tags = s.get("tags", {}) or {}
-                      lang = (tags.get("language") or "").lower()
-                      title = (tags.get("title") or "").lower()
-
-                      if (
-                          lang in ["ind", "id", "idn", "indonesian"] or
-                          "indo" in title or
-                          "indonesia" in title
-                      ):
-                          info["sub_rel_idx"] = rel_idx
-                          info["sub_stream_idx"] = s["index"]
-                          info["sub_codec"] = s.get("codec_name", "ass")
-                          print(f"✅ Found Indo Sub at subtitle track {rel_idx} (abs stream #{s['index']})")
-                          return info
-
-                  print("⚠️ Subtitle Indonesia tidak ditemukan.")
+                      l, t = (tags.get("language") or "").lower(), (tags.get("title") or "").lower()
+                      if any(x in l for x in ["ind", "id"]) or any(x in t for x in ["indo", "indonesia"]) or any(k in t for k in fk):
+                          info["sub_rel_idx"] = i; return info
+                  if len(sub_streams) == 1: info["sub_rel_idx"] = 0
               return info
 
           async def main():
               info = get_stream_data()
               font_path = None
-
-              # Extract Fonts
               if info["has_fonts"] and IS_LOCAL:
                   os.makedirs(FONTS_DIR, exist_ok=True)
-                  print("🎨 Extracting fonts...")
-                  subprocess.run(
-                      ["ffmpeg", "-dump_attachment:t", "", "-i", os.path.abspath(VIDEO_INPUT)],
-                      cwd=FONTS_DIR,
-                      stderr=subprocess.DEVNULL
-                  )
+                  subprocess.run(["ffmpeg", "-dump_attachment:t", "", "-i", os.path.abspath(VIDEO_INPUT)], cwd=FONTS_DIR, stderr=subprocess.DEVNULL)
                   font_path = os.path.abspath(FONTS_DIR)
 
-              # Telegram Session
               client = TelegramClient(StringSession(STRING_SESSION), API_ID, API_HASH)
               await client.connect()
-              full_rtmp = CUSTOM_RTMP
-              if not full_rtmp:
-                  entity = await client.get_entity(TARGET_CHAT)
-                  try:
-                      await client(functions.phone.CreateGroupCallRequest(peer=entity, title=VIDEO_FILENAME, rtmp_stream=True))
-                  except:
-                      pass
-                  call = await client(functions.phone.GetGroupCallStreamRtmpUrlRequest(peer=entity, revoke=False))
-                  full_rtmp = f"{call.url}{call.key}"
+              rtmp = CUSTOM_RTMP
+              if not rtmp:
+                  ent = await client.get_entity(TARGET_CHAT)
+                  try: await client(functions.phone.CreateGroupCallRequest(peer=ent, title=VIDEO_FILENAME[:120], rtmp_stream=True))
+                  except: pass
+                  call = await client(functions.phone.GetGroupCallStreamRtmpUrlRequest(peer=ent, revoke=False))
+                  rtmp = f"{call.url}{call.key}"
 
-              await client.send_message(
-                  TARGET_CHAT,
-                  f"🎬 **STREAM STARTED**\n🏷 `{VIDEO_FILENAME}`\n💬 Subtitle: `{'Indonesia' if info['sub_rel_idx'] != -1 else 'None'}`"
+              sub_status = "✅ Aktif (Indonesia)" if info["sub_rel_idx"] != -1 else "❌ Tidak Ada/Nonaktif"
+              pesan = (
+                  f"🎬 **STREAMING DIMULAI** 🎬\n\n"
+                  f"🏷 **Judul:** `{VIDEO_FILENAME}`\n"
+                  f"🎥 **Resolusi:** `{info['res']}`\n"
+                  f"📺 **Kualitas Asli:** `{info['src_q']}`\n"
+                  f"⏱ **Durasi:** `{info['dur']}`\n"
+                  f"💬 **Subtitle:** `{sub_status}`\n"
+                  f"⚙️ **Kualitas Output:** `{QUALITY}`\n\n"
+                  f"🍿 *Selamat menonton! Jangan lupa siapkan camilan.*"
               )
+              await client.send_message(TARGET_CHAT, pesan)
               await client.disconnect()
 
-              # FFmpeg Stream
               last_ts = "00:00:00"
               while True:
                   vf = []
-                  if QUALITY == "1080p":
-                      vf.append("scale=1920:-2")
-
-                  # Burn subtitle langsung dari file lokal
+                  if QUALITY == "1080p": vf.append("scale=1920:-2")
                   if info["sub_rel_idx"] != -1 and IS_LOCAL:
-                      video_path = ffmpeg_escape_filter_path(os.path.abspath(VIDEO_INPUT))
-                      sub_cmd = f"subtitles=filename='{video_path}':si={info['sub_rel_idx']}"
-                      if font_path:
-                          fonts_path = ffmpeg_escape_filter_path(font_path)
-                          sub_cmd += f":fontsdir='{fonts_path}'"
-                      vf.append(sub_cmd)
-                      print(f"📝 Burning subtitle track {info['sub_rel_idx']} (abs #{info['sub_stream_idx']})")
+                      vp = ffmpeg_escape_filter_path(os.path.abspath(VIDEO_INPUT))
+                      sc = f"subtitles=filename='{vp}':si={info['sub_rel_idx']}"
+                      if font_path: sc += f":fontsdir='{ffmpeg_escape_filter_path(font_path)}'"
+                      vf.append(sc)
 
                   cmd = ["ffmpeg", "-y", "-re"]
-                  if IS_LOCAL and last_ts != "00:00:00":
-                      cmd.extend(["-ss", last_ts])
+                  if IS_LOCAL and last_ts != "00:00:00": cmd.extend(["-ss", last_ts])
                   cmd.extend(["-i", VIDEO_INPUT])
+                  if vf: cmd.extend(["-vf", ",".join(vf)])
+                  br = "4800k" if QUALITY == "1080p" else "3000k"
+                  cmd.extend(["-c:v", "libx264", "-preset", "veryfast", "-b:v", br, "-maxrate", br, "-bufsize", "8000k",
+                             "-pix_fmt", "yuv420p", "-g", "60", "-c:a", "aac", "-b:a", "128k", "-f", "flv", rtmp])
 
-                  if vf:
-                      cmd.extend(["-vf", ",".join(vf)])
-
-                  br = "5000k" if QUALITY == "1080p" else "3500k"
-                  cmd.extend([
-                      "-c:v", "libx264", "-preset", "veryfast", "-b:v", br, "-maxrate", br, "-bufsize", "8000k",
-                      "-pix_fmt", "yuv420p", "-g", "60", "-c:a", "aac", "-b:a", "128k", "-f", "flv", full_rtmp
-                  ])
-
-                  proc = subprocess.Popen(
-                      cmd,
-                      stdout=subprocess.PIPE,
-                      stderr=subprocess.STDOUT,
-                      universal_newlines=True
-                  )
-
+                  proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, universal_newlines=True)
                   for line in proc.stdout:
                       t = re.search(r"time=(\d{2}:\d{2}:\d{2})", line)
-                      if t:
-                          last_ts = t.group(1)
-                      if "frame=" in line:
-                          print(f"\rStreaming: {last_ts}", end="")
-
-                  if proc.wait() == 0:
-                      break
+                      if t: last_ts = t.group(1)
+                      if "frame=" in line: print(f"\rStreaming: {last_ts}", end="")
+                  if proc.wait() == 0: break
                   await asyncio.sleep(5)
 
           if __name__ == '__main__':
               asyncio.run(main())
           EOF
-
           python3 streamer.py
