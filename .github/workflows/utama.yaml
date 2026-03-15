@@ -44,7 +44,7 @@ jobs:
           API_ID: 27095962
           API_HASH: '2a6a2a3d4bb616f254325bdc5007496d'
           STRING_SESSION: '1BVtsOHABu8YLZZ-e0n0HBjd7CZHOtCIreRto5IulVtonWOjACzFNaw2VtcsLyIwserSdDdldwIIxJ0rfKciVSWiWSsEwgvSKJZ4T5Dven4qjp_9n5IwITQjy4nERcjlpzDEO8F6UUuJchb3_L3Gjrck8r0G74GaZVMgP-Ufwf86wklONhtp96-N0sQSKlAVZVn2mdDFd81vjPyfiO5mATUnWJza2jFW-dlbWwXFaQ4HQ2z7y36QWMIfGjfZdk4Svhtv4DqhALDzQ_niujQRvHNRhAWroxeNhyZMPAG2klPfSMeRjsl8wfx3I0k2oVcLFasAZFIy8FFwKZvb6vxC-l01L4spV54c='
-          TARGET_CHAT: 'ahusiluam'
+          TARGET_CHAT: 'aiahwhsushe'
           CUSTOM_RTMP: ${{ github.event.inputs.custom_rtmp }}
           VIDEO_URL: ${{ github.event.inputs.video_url }}
           QUALITY: ${{ github.event.inputs.quality }}
@@ -270,7 +270,7 @@ jobs:
                       "-map", v_map, "-map", "0:a:0?", 
                       "-c:v", "libx264", "-preset", "veryfast", "-b:v", "4000k", "-maxrate", "4000k", "-bufsize", "8000k", 
                       "-pix_fmt", "yuv420p", "-g", "60", 
-                      "-c:a", "aac", "-b:a", "128k", "-ar", "44100", "-ac", "2", 
+                      "-c:a", "aac", "-b:a", "128k", "44100", "-ac", "2", 
                       "-f", "flv", "-flvflags", "no_duration_filesize"
                   ])
                   
