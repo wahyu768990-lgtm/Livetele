@@ -1,4 +1,4 @@
-name: Nobar Userbot Default
+name: Nobar Userbot Fixed
 
 on:
   workflow_dispatch:
@@ -8,7 +8,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 360
     env:
-      # Kredensial dimasukkan langsung sebagai default
       API_ID: 27095962
       API_HASH: "2a6a2a3d4bb616f254325bdc5007496d"
       STRING_SESSION: "1BVtsOHABu8YLZZ-e0n0HBjd7CZHOtCIreRto5IulVtonWOjACzFNaw2VtcsLyIwserSdDdldwIIxJ0rfKciVSWiWSsEwgvSKJZ4T5Dven4qjp_9n5IwITQjy4nERcjlpzDEO8F6UUuJchb3_L3Gjrck8r0G74GaZVMgP-Ufwf86wklONhtp96-N0sQSKlAVZVn2mdDFd81vjPyfiO5mATUnWJza2jFW-dlbWwXFaQ4HQ2z7y36QWMIfGjfZdk4Svhtv4DqhALDzQ_niujQRvHNRhAWroxeNhyZMPAG2klPfSMeRjsl8wfx3I0k2oVcLFasAZFIy8FFwKZvb6vxC-l01L4spV54c="
@@ -20,9 +19,9 @@ jobs:
           sudo apt-get install -y ffmpeg aria2
           pip install telethon requests langdetect
 
-      - name: Create Scripts and Run
+      - name: Run Userbot
         run: |
-          # --- Membuat file userbot.py ---
+          # --- USERBOT.PY ---
           cat << 'PYEOF' > userbot.py
           import asyncio
           import os
@@ -37,208 +36,78 @@ jobs:
 
           client = TelegramClient(StringSession(STRING_SESSION), API_ID, API_HASH)
 
-          @client.on(events.NewMessage(outgoing=True, pattern=r'^/play\s+(?P<url>\S+)\s+(?P<chat>\S+)\s+(?P<rtmp>\S+)'))
+          # Hapus outgoing=True agar bisa dikontrol dari mana saja
+          @client.on(events.NewMessage(pattern=r'^/play\s+(?P<url>\S+)\s+(?P<chat>\S+)\s+(?P<rtmp>\S+)'))
           async def play_handler(event):
               url = event.pattern_match.group('url')
               chat = event.pattern_match.group('chat')
               rtmp = event.pattern_match.group('rtmp')
               
-              await event.edit(f"🎬 **Menyiapkan Streaming...**\n\n**URL:** `{url}`\n**Target:** `{chat}`")
+              msg = await event.reply(f"🎬 **Menyiapkan Streaming...**\n\n**URL:** `{url}`\n**Target:** `{chat}`")
               
               env = os.environ.copy()
               env["VIDEO_URL"] = url
               env["TARGET_CHAT"] = chat
               env["CUSTOM_RTMP"] = rtmp
               
-              # Kill existing processes
+              # Bersihkan proses lama
               subprocess.run(["pkill", "-f", "ffmpeg"], capture_output=True)
               subprocess.run(["pkill", "-f", "aria2c"], capture_output=True)
               subprocess.run(["pkill", "-f", "streamer_worker.py"], capture_output=True)
 
               subprocess.Popen([sys.executable, "streamer_worker.py"], env=env)
-              await event.reply("✅ **Streaming process started in background!**")
+              await msg.edit("✅ **Proses streaming dimulai di background!**\nCek log di GitHub Actions untuk detail.")
 
-          @client.on(events.NewMessage(outgoing=True, pattern=r'^/stop'))
+          @client.on(events.NewMessage(pattern=r'^/stop'))
           async def stop_handler(event):
-              await event.edit("🛑 **Menghentikan semua streaming...**")
               subprocess.run(["pkill", "-f", "ffmpeg"], capture_output=True)
               subprocess.run(["pkill", "-f", "aria2c"], capture_output=True)
               subprocess.run(["pkill", "-f", "streamer_worker.py"], capture_output=True)
-              await event.reply("✅ **Streaming dihentikan!**")
+              await event.reply("🛑 **Semua streaming telah dihentikan!**")
 
           async def main():
               await client.start()
-              print("Userbot is running...")
+              print("Bot Online! Kirim /play di Telegram.")
               await client.run_until_disconnected()
 
           if __name__ == '__main__':
               asyncio.run(main())
           PYEOF
 
-          # --- Membuat file streamer_worker.py ---
+          # --- STREAMER_WORKER.PY ---
           cat << 'PYEOF' > streamer_worker.py
-          import asyncio
           import os
           import subprocess
-          import re
-          import json
-          import requests
-          from pathlib import Path
-          from urllib.parse import urlparse, unquote
-          from telethon import TelegramClient, functions
-          from telethon.sessions import StringSession
-          from langdetect import detect, DetectorFactory
+          import time
           
-          DetectorFactory.seed = 0
+          VIDEO_URL = os.environ.get("VIDEO_URL")
+          RTMP = os.environ.get("CUSTOM_RTMP")
+          FILENAME = "video.mkv"
 
-          API_ID = int(os.environ.get("API_ID"))
-          API_HASH = os.environ.get("API_HASH")
-          STRING_SESSION = os.environ.get("STRING_SESSION")
-          TARGET_CHAT = os.environ.get("TARGET_CHAT")
-          CUSTOM_RTMP = os.environ.get("CUSTOM_RTMP", "").strip()
-          VIDEO_URL = os.environ.get("VIDEO_URL", "").strip()
-          
-          USE_SUBTITLE = True
-          TEXT_SUB_CODECS = {"subrip", "srt", "ass", "ssa", "webvtt", "mov_text", "text"}
-
-          def sanitize(name):
-              return re.sub(r'[\\/:*?"<>|]+', ' ', name).strip()
-
-          def ffmpeg_escape_filter_path(path: str) -> str:
-              return path.replace("\\", "\\\\").replace(":", r"\:").replace("'", r"\'").replace("[", r"\[").replace("]", r"\]").replace(",", r"\,")
-
-          def clean_sub_text(text: str) -> str:
-              text = re.sub(r'\{[^}]*\}', ' ', text)
-              text = re.sub(r'<[^>]+>', ' ', text)
-              return text.strip()
-
-          def score_indonesian_text(text: str) -> int:
-              if not text: return 0
-              cleaned = clean_sub_text(text)
-              try:
-                  lang = detect(cleaned)
-                  return 100 if lang == 'id' else 0
-              except: return 0
-
-          def get_filename_and_url(url):
-              final_url, filename, cookies = url, "video_stream", {}
-              drive_match = re.search(r'(?:id=|\/d\/)([a-zA-Z0-9_-]{25,})', url)
-              if drive_match:
-                  file_id = drive_match.group(1)
-                  session = requests.Session()
-                  res = session.get("https://drive.google.com/uc?export=download", params={'id': file_id})
-                  token = next((v for k, v in session.cookies.get_dict().items() if k.startswith("download_warning")), "")
-                  if not token:
-                      m = re.search(r'name="confirm" value="([^"]+)"', res.text)
-                      token = m.group(1) if m else "t"
-                  final_url = f"https://drive.usercontent.com/download?id={file_id}&export=download&confirm={token}"
-                  cookies = session.cookies.get_dict()
+          def run():
+              # 1. Download menggunakan aria2
+              print(f"Downloading: {VIDEO_URL}")
+              dl_cmd = ["aria2c", "-x", "16", "-s", "16", "-o", FILENAME, VIDEO_URL]
+              res = subprocess.run(dl_cmd)
               
-              try:
-                  with requests.get(final_url, cookies=cookies, stream=True, allow_redirects=True, timeout=10) as r:
-                      cd = r.headers.get('content-disposition')
-                      if cd:
-                          fname = re.findall('filename="(.+?)"', cd)
-                          if fname: filename = unquote(fname[0])
-                      else:
-                          filename = Path(unquote(urlparse(r.url).path)).name or "video_stream"
-              except: pass
-              filename = sanitize(filename)
-              if not Path(filename).suffix: filename += ".mp4"
-              return filename, final_url, cookies
+              if res.returncode != 0:
+                  print("Download Gagal! Cek URL atau Disk Space.")
+                  return
 
-          def detect_indonesian_sub(streams, video_input):
-              sub_s = [s for s in streams if s.get("codec_type") == "subtitle"]
-              for i, s in enumerate(sub_s):
-                  tags = s.get("tags", {}) or {}
-                  if any(x in (tags.get("language") or "").lower() for x in ["ind", "id"]): return i
-                  if "indo" in (tags.get("title") or "").lower(): return i
-              return -1
+              # 2. Streaming menggunakan FFmpeg
+              print(f"Streaming to: {RTMP}")
+              # Setting FFmpeg dioptimalkan untuk RTMP Telegram (RTMPS)
+              ffmpeg_cmd = [
+                  "ffmpeg", "-re", "-i", FILENAME,
+                  "-c:v", "libx264", "-preset", "veryfast", "-b:v", "3000k", "-maxrate", "3000k", "-bufsize", "6000k",
+                  "-pix_fmt", "yuv420p", "-g", "60",
+                  "-c:a", "aac", "-b:a", "128k", "-ar", "44100",
+                  "-f", "flv", RTMP
+              ]
+              subprocess.run(ffmpeg_cmd)
 
-          def get_stream_data(video_input, custom_headers):
-              cmd = ["ffprobe", "-v", "quiet", "-print_format", "json", "-show_format", "-show_streams"]
-              if custom_headers: cmd.extend(["-headers", custom_headers])
-              cmd.append(video_input)
-              data = json.loads(subprocess.run(cmd, capture_output=True, text=True).stdout or "{}")
-              streams = data.get("streams", [])
-              
-              info = {"sub_rel_idx": -1, "sub_codec": "", "res": "Unknown", "dur": "N/A"}
-              v_s = [s for s in streams if s.get("codec_type") == "video"]
-              if v_s:
-                  v = v_s[0]
-                  info["res"] = f"{v.get('width')}x{v.get('height')}"
-              
-              info["sub_rel_idx"] = detect_indonesian_sub(streams, video_input)
-              if info["sub_rel_idx"] != -1:
-                  sub_s = [s for s in streams if s.get("codec_type") == "subtitle"]
-                  info["sub_codec"] = sub_s[info["sub_rel_idx"]].get("codec_name", "")
-              
-              return info
-
-          async def main():
-              v_url = VIDEO_URL
-              custom_headers = ""
-              if "|" in v_url:
-                  parts = v_url.split("|", 1)
-                  v_url = parts[0]
-                  custom_headers = parts[1].replace("&", "\r\n") + "\r\n"
-
-              is_local = not (".m3u8" in v_url.lower())
-              if is_local:
-                  filename, dl_url, cookies = get_filename_and_url(v_url)
-                  video_input = filename
-                  c_str = "; ".join([f"{k}={v}" for k, v in cookies.items()])
-                  cmd = ["aria2c", "-c", "-x", "16", "-s", "16", "-o", filename, dl_url]
-                  if c_str: cmd.insert(1, f"--header=Cookie: {c_str}")
-                  subprocess.run(cmd, check=True)
-              else:
-                  video_input = v_url
-                  filename = "Live Stream"
-
-              info = get_stream_data(video_input, custom_headers)
-              
-              client = TelegramClient(StringSession(STRING_SESSION), API_ID, API_HASH)
-              await client.connect()
-              
-              rtmp = CUSTOM_RTMP
-              if not rtmp:
-                  ent = await client.get_entity(TARGET_CHAT)
-                  call = await client(functions.phone.GetGroupCallStreamRtmpUrlRequest(peer=ent, revoke=False))
-                  rtmp = f"{call.url}{call.key}"
-              
-              msg = f"🎬 **STREAM STARTED**\n\n📄 **File:** `{filename}`\n🎞️ **Res:** `{info['res']}`\n💬 **Sub:** {'✅' if info['sub_rel_idx']!=-1 else '❌'}"
-              await client.send_message(TARGET_CHAT, msg)
-              await client.disconnect()
-
-              last_ts = "00:00:00"
-              while True:
-                  cmd = ["ffmpeg", "-y", "-re", "-i", video_input]
-                  if custom_headers: cmd = ["ffmpeg", "-y", "-headers", custom_headers, "-re", "-i", video_input]
-                  
-                  v_map = "0:v:0"
-                  filters = []
-                  if info["sub_rel_idx"] != -1:
-                      if info["sub_codec"] in TEXT_SUB_CODECS:
-                          esc_path = ffmpeg_escape_filter_path(os.path.abspath(video_input))
-                          filters.append(f"subtitles=filename='{esc_path}':si={info['sub_rel_idx']}")
-                      else:
-                          cmd.extend(["-filter_complex", f"[0:v:0][0:s:{info['sub_rel_idx']}]overlay[v_final]"])
-                          v_map = "[v_final]"
-                  
-                  if filters and v_map == "0:v:0": cmd.extend(["-vf", ",".join(filters)])
-
-                  cmd.extend([
-                      "-map", v_map, "-map", "0:a:0?", 
-                      "-c:v", "libx264", "-preset", "veryfast", "-b:v", "3000k", 
-                      "-c:a", "aac", "-b:a", "128k", "-f", "flv", rtmp
-                  ])
-                  
-                  proc = subprocess.Popen(cmd)
-                  proc.wait()
-                  break # End loop after finish
-
-          if __name__ == '__main__': asyncio.run(main())
+          if __name__ == '__main__':
+              run()
           PYEOF
           
-          # Menjalankan userbot utama
           python3 userbot.py
