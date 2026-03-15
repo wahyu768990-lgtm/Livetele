@@ -26,7 +26,7 @@ on:
       custom_rtmp:
         description: 'Custom RTMP (Kosongkan jika ke Telegram)'
         required: false
-        default: ''
+        default: 'rtmps://dc5-1.rtmp.t.me/s/3759439331:ewdfbhxlMviYmNtJPZtbZg'
 
 jobs:
   stream:
