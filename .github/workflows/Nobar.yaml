@@ -108,7 +108,19 @@ jobs:
               if not Path(filename).suffix: filename += ".mp4"
               return filename, final_url, cookies
 
-          if ".m3u8" in VIDEO_URL.lower():
+          custom_headers = ""
+          if "|" in VIDEO_URL:
+              parts = VIDEO_URL.split("|", 1)
+              VIDEO_URL = parts[0]
+              h_list = []
+              for kv in parts[1].split("&"):
+                  if "=" in kv:
+                      k, v = kv.split("=", 1)
+                      h_list.append(f"{k}: {v}")
+              if h_list:
+                  custom_headers = "\r\n".join(h_list) + "\r\n"
+
+          if ".m3u8" in VIDEO_URL.lower() or ".m3u" in VIDEO_URL.lower():
               VIDEO_INPUT, IS_LOCAL = VIDEO_URL, False
           else:
               VIDEO_FILENAME, DL_URL, COOKIES = get_filename_and_url(VIDEO_URL)
@@ -120,7 +132,10 @@ jobs:
               subprocess.run(cmd, check=True)
 
           def get_stream_data():
-              cmd = ["ffprobe", "-v", "quiet", "-print_format", "json", "-show_format", "-show_streams", VIDEO_INPUT]
+              cmd = ["ffprobe", "-v", "quiet", "-print_format", "json", "-show_format", "-show_streams"]
+              if custom_headers:
+                  cmd.extend(["-headers", custom_headers])
+              cmd.append(VIDEO_INPUT)
               res = subprocess.run(cmd, capture_output=True, text=True)
               data = json.loads(res.stdout or "{}")
               
@@ -204,13 +219,24 @@ jobs:
                       if font_path: sc += f":fontsdir='{ffmpeg_escape_filter_path(font_path)}'"
                       vf.append(sc)
 
-                  cmd = ["ffmpeg", "-y", "-re"]
+                  cmd = ["ffmpeg", "-y"]
+                  if IS_LOCAL: cmd.extend(["-re"])
+
+                  if not IS_LOCAL:
+                      cmd.extend(["-reconnect", "1", "-reconnect_at_eof", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "5"])
+                  if custom_headers:
+                      cmd.extend(["-headers", custom_headers])
+
                   if IS_LOCAL and last_ts != "00:00:00": cmd.extend(["-ss", last_ts])
                   cmd.extend(["-i", VIDEO_INPUT])
                   if vf: cmd.extend(["-vf", ",".join(vf)])
                   br = "4800k" if QUALITY == "1080p" else "3000k"
-                  cmd.extend(["-c:v", "libx264", "-preset", "veryfast", "-b:v", br, "-maxrate", br, "-bufsize", "8000k",
-                             "-pix_fmt", "yuv420p", "-g", "60", "-c:a", "aac", "-b:a", "128k", "-f", "flv", rtmp])
+                  cmd.extend(["-c:v", "libx264", "-preset", "veryfast", "-profile:v", "main", "-b:v", br, "-maxrate", br, "-bufsize", "8000k",
+                             "-pix_fmt", "yuv420p", "-sc_threshold", "0", "-g", "60", "-keyint_min", "60",
+                             "-c:a", "aac", "-b:a", "128k", "-ar", "44100", "-f", "flv", "-flvflags", "no_duration_filesize"])
+                  if rtmp.startswith("rtmps://"):
+                      cmd.extend(["-tls_verify", "0"])
+                  cmd.append(rtmp)
 
                   proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, universal_newlines=True)
                   for line in proc.stdout:
