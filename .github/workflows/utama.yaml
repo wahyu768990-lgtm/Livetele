@@ -1,4 +1,4 @@
-name: Nobar Stream Ultimate - Fixed Subtitle
+Name: Nobar Stream Ultimate - Fixed Subtitle
 
 on:
   workflow_dispatch:
@@ -44,7 +44,7 @@ jobs:
           API_ID: 27095962
           API_HASH: '2a6a2a3d4bb616f254325bdc5007496d'
           STRING_SESSION: '1BVtsOHABu8YLZZ-e0n0HBjd7CZHOtCIreRto5IulVtonWOjACzFNaw2VtcsLyIwserSdDdldwIIxJ0rfKciVSWiWSsEwgvSKJZ4T5Dven4qjp_9n5IwITQjy4nERcjlpzDEO8F6UUuJchb3_L3Gjrck8r0G74GaZVMgP-Ufwf86wklONhtp96-N0sQSKlAVZVn2mdDFd81vjPyfiO5mATUnWJza2jFW-dlbWwXFaQ4HQ2z7y36QWMIfGjfZdk4Svhtv4DqhALDzQ_niujQRvHNRhAWroxeNhyZMPAG2klPfSMeRjsl8wfx3I0k2oVcLFasAZFIy8FFwKZvb6vxC-l01L4spV54c='
-          TARGET_CHAT: 'aiahwhsushe'
+          TARGET_CHAT: 'ahusiluam'
           CUSTOM_RTMP: ${{ github.event.inputs.custom_rtmp }}
           VIDEO_URL: ${{ github.event.inputs.video_url }}
           QUALITY: ${{ github.event.inputs.quality }}
@@ -77,7 +77,6 @@ jobs:
           SUBTITLE_TRACK = os.environ.get("SUBTITLE_TRACK", "auto").strip().lower()
 
           FONTS_DIR = "fonts_extracted"
-          VIDEO_FILENAME = "film_lokal.mp4"
           TEXT_SUB_CODECS = {"subrip", "srt", "ass", "ssa", "webvtt", "mov_text", "text"}
 
           def sanitize(name):
@@ -166,11 +165,24 @@ jobs:
               cmd.append(video_input)
               data = json.loads(subprocess.run(cmd, capture_output=True, text=True).stdout or "{}")
               streams = data.get("streams", [])
-              info = {"sub_rel_idx": -1, "sub_codec": "", "res": "N/A", "dur": "N/A"}
+              format_info = data.get("format", {})
+              
+              info = {"sub_rel_idx": -1, "sub_codec": "", "res": "N/A", "dur": "N/A", "size": "N/A"}
+              
+              # Get Duration
+              duration_sec = float(format_info.get("duration", 0))
+              if duration_sec > 0:
+                  hrs = int(duration_sec // 3600)
+                  mins = int((duration_sec % 3600) // 60)
+                  secs = int(duration_sec % 60)
+                  info["dur"] = f"{hrs:02}:{mins:02}:{secs:02}"
+              
+              # Get Resolution
               v_s = [s for s in streams if s.get("codec_type") == "video"]
               if v_s:
                   v = sorted(v_s, key=lambda x: x.get("height", 0), reverse=True)[0]
                   info["res"] = f"{v.get('width')}x{v.get('height')}"
+              
               if USE_SUBTITLE:
                   info["sub_rel_idx"] = detect_indonesian_sub(streams, video_input)
                   if info["sub_rel_idx"] != -1:
@@ -197,6 +209,7 @@ jobs:
                   subprocess.run(cmd, check=True)
               else:
                   VIDEO_INPUT = v_url
+                  VIDEO_FILENAME = Path(urlparse(v_url).path).name or "Live Stream / M3U8"
 
               info = get_stream_data(VIDEO_INPUT, custom_headers)
               
@@ -210,8 +223,21 @@ jobs:
                   call = await client(functions.phone.GetGroupCallStreamRtmpUrlRequest(peer=ent, revoke=False))
                   rtmp = f"{call.url}{call.key}"
               
-              sub_status = f"✅ Aktif (Track {info['sub_rel_idx']})" if info['sub_rel_idx'] != -1 else "❌ Tidak Ditemukan"
-              msg = f"🎬 **STREAMING DIMULAI**\n\n🎥 **Res:** `{info['res']}`\n💬 **Sub:** `{sub_status}`\n⚙️ **Log:** Muncul di GitHub Console"
+              # --- TELEGRAM MESSAGE UI ---
+              sub_status = f"✅ Aktif (Track {info['sub_rel_idx']} - {info['sub_codec']})" if info['sub_rel_idx'] != -1 else "❌ Tidak Ditemukan"
+              source_label = "📥 Local / Cloud" if IS_LOCAL else "🌐 Live URL / M3U8"
+              
+              msg = (
+                  f"🎬 **NOBAR STREAM STARTED**\n\n"
+                  f"📄 **File:** `{VIDEO_FILENAME}`\n"
+                  f"🎞️ **Resolusi:** `{info['res']}`\n"
+                  f"⏱️ **Durasi:** `{info['dur']}`\n"
+                  f"💬 **Subtitle:** {sub_status}\n"
+                  f"📡 **Source:** `{source_label}`\n\n"
+                  f"⚙️ **Status:** `Streaming is active...`"
+              )
+              # ---------------------------
+              
               await client.send_message(TARGET_CHAT, msg)
               await client.disconnect()
 
@@ -225,24 +251,20 @@ jobs:
                   
                   cmd.extend(["-i", VIDEO_INPUT])
                   
-                  # --- FILTER COMPLEX UNTUK SUBTITLE & SCALE ---
                   filters = []
                   v_map = "0:v:0"
                   if QUALITY == "1080p":
                       filters.append("scale=1920:-2")
                   if info["sub_rel_idx"] != -1:
-                      # Jika format subtitle berbasis teks (SRT/ASS), gunakan filter subtitles
                       if info["sub_codec"] in TEXT_SUB_CODECS:
                           esc_path = ffmpeg_escape_filter_path(os.path.abspath(VIDEO_INPUT))
                           filters.append(f"subtitles=filename='{esc_path}':si={info['sub_rel_idx']}")
                       else:
-                          # Jika format image (PGS/VobSub), gunakan overlay
                           cmd.extend(["-filter_complex", f"[0:v:0][0:s:{info['sub_rel_idx']}]overlay[v_final]"])
                           v_map = "[v_final]"
                   
                   if filters and v_map == "0:v:0":
                       cmd.extend(["-vf", ",".join(filters)])
-                  # ---------------------------------------------
 
                   cmd.extend([
                       "-map", v_map, "-map", "0:a:0?", 
