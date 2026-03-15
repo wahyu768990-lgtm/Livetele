@@ -157,7 +157,7 @@ jobs:
                   "-bufsize", "8000k",
                   "-pix_fmt", "yuv420p",
                   "-g", "60",              # Penting untuk RTMP
-                  "-c:a", "aac", "-b:a", "128k", "-ar", "44100",
+                  "-c:a", "aac", "-b:a", "128k", "-ac", "2", "-ar", "44100",
                   "-f", "flv", rtmp
               ])
               
