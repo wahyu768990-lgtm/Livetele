@@ -233,7 +233,7 @@ jobs:
                   br = "4800k" if QUALITY == "1080p" else "3000k"
                   cmd.extend(["-c:v", "libx264", "-preset", "veryfast", "-profile:v", "main", "-b:v", br, "-maxrate", br, "-bufsize", "8000k",
                              "-pix_fmt", "yuv420p", "-sc_threshold", "0", "-g", "60", "-keyint_min", "60",
-                             "-c:a", "aac", "-b:a", "128k", "-ar", "44100", "-f", "flv", "-flvflags", "no_duration_filesize"])
+                             "-c:a", "aac", "-b:a", "128k", "-ac", "2", "-ar", "44100", "-f", "flv", "-flvflags", "no_duration_filesize"])
                   if rtmp.startswith("rtmps://"):
                       cmd.extend(["-tls_verify", "0"])
                   cmd.append(rtmp)
