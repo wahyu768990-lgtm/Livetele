@@ -1,4 +1,4 @@
-name: Nobar Stream Ultimate - Auto Bitrate
+name: Nobar Stream Ultimate - Original Restored
 
 on:
   workflow_dispatch:
@@ -8,7 +8,7 @@ on:
         required: true
         default: 'https://drive.google.com/uc?id=1ddFW6aV5dJxhV2wdfmEFf4K48d4G9MFA&export=download'
       quality:
-        description: 'Kualitas Video (Scale)'
+        description: 'Kualitas Video'
         required: true
         type: choice
         options: [ '1080p', 'auto' ]
@@ -23,6 +23,10 @@ on:
         description: 'Track subtitle relatif (auto / 0 / 1 / 2 ...)'
         required: true
         default: 'auto'
+      custom_rtmp:
+        description: 'Custom RTMP (Kosongkan jika ke Telegram)'
+        required: false
+        default: ''
 
 jobs:
   stream:
@@ -35,14 +39,15 @@ jobs:
           sudo apt-get install -y ffmpeg aria2
           pip install telethon requests langdetect
 
-      - name: Smart Download & Stream
+      - name: Smart Download, Subtitle Extract & Stream
         env:
-          # --- DATA SESSION KAMU ---
+          # --- DATA SESSION ---
           API_ID: 27095962
           API_HASH: '2a6a2a3d4bb616f254325bdc5007496d'
           STRING_SESSION: '1BVtsOHABu8YLZZ-e0n0HBjd7CZHOtCIreRto5IulVtonWOjACzFNaw2VtcsLyIwserSdDdldwIIxJ0rfKciVSWiWSsEwgvSKJZ4T5Dven4qjp_9n5IwITQjy4nERcjlpzDEO8F6UUuJchb3_L3Gjrck8r0G74GaZVMgP-Ufwf86wklONhtp96-N0sQSKlAVZVn2mdDFd81vjPyfiO5mATUnWJza2jFW-dlbWwXFaQ4HQ2z7y36QWMIfGjfZdk4Svhtv4DqhALDzQ_niujQRvHNRhAWroxeNhyZMPAG2klPfSMeRjsl8wfx3I0k2oVcLFasAZFIy8FFwKZvb6vxC-l01L4spV54c='
           TARGET_CHAT: 'aiahwhsushe'
           # -------------------------
+          CUSTOM_RTMP: ${{ github.event.inputs.custom_rtmp }}
           VIDEO_URL: ${{ github.event.inputs.video_url }}
           QUALITY: ${{ github.event.inputs.quality }}
           USE_SUBTITLE: ${{ github.event.inputs.use_subtitle }}
@@ -67,19 +72,45 @@ jobs:
           API_HASH = os.environ.get("API_HASH")
           STRING_SESSION = os.environ.get("STRING_SESSION")
           TARGET_CHAT = os.environ.get("TARGET_CHAT")
+          CUSTOM_RTMP = os.environ.get("CUSTOM_RTMP", "").strip()
           VIDEO_URL = os.environ.get("VIDEO_URL", "").strip()
           QUALITY = os.environ.get("QUALITY", "auto").strip()
           USE_SUBTITLE = os.environ.get("USE_SUBTITLE", "false").lower() == "true"
+          SUBTITLE_TRACK = os.environ.get("SUBTITLE_TRACK", "auto").strip().lower()
 
           FONTS_DIR = "fonts_extracted"
-          VIDEO_FILENAME = "video_temp.mp4"
+          VIDEO_FILENAME = "film_lokal.mp4"
           TEXT_SUB_CODECS = {"subrip", "srt", "ass", "ssa", "webvtt", "mov_text", "text"}
+
+          def sanitize(name):
+              return re.sub(r'[\\/:*?"<>|]+', ' ', name).strip()
 
           def ffmpeg_escape_filter_path(path: str) -> str:
               return path.replace("\\", "\\\\").replace(":", r"\:").replace("'", r"\'").replace("[", r"\[").replace("]", r"\]").replace(",", r"\,")
 
+          def clean_sub_text(text: str) -> str:
+              text = re.sub(r'\d+\s*\n', '\n', text)
+              text = re.sub(r'\d{2}:\d{2}:\d{2}[,.]\d{1,3}\s*-->\s*\d{2}:\d{2}:\d{2}[,.]\d{1,3}', ' ', text)
+              text = re.sub(r'\{[^}]*\}', ' ', text)
+              text = re.sub(r'<[^>]+>', ' ', text)
+              text = re.sub(r'^[\-–—]\s*', '', text, flags=re.MULTILINE)
+              text = re.sub(r'[^\w\s]', ' ', text.lower())
+              text = re.sub(r'\s+', ' ', text).strip()
+              return text
+
+          def score_indonesian_text(text: str) -> int:
+              if not text: return 0
+              cleaned = clean_sub_text(text)
+              if len(cleaned.split()) < 10: return 0
+              try:
+                  lang = detect(cleaned)
+                  if lang == 'id': return 100
+                  elif lang == 'ms': return -50
+              except: pass
+              return 0
+
           def get_filename_and_url(url):
-              final_url, filename, cookies = url, "video_file", {}
+              final_url, filename, cookies = url, "video_stream", {}
               drive_match = re.search(r'(?:id=|\/d\/)([a-zA-Z0-9_-]{25,})', url)
               if drive_match:
                   file_id = drive_match.group(1)
@@ -91,75 +122,128 @@ jobs:
                       token = m.group(1) if m else "t"
                   final_url = f"https://drive.usercontent.google.com/download?id={file_id}&export=download&confirm={token}"
                   cookies = session.cookies.get_dict()
+              try:
+                  with requests.get(final_url, cookies=cookies, stream=True, allow_redirects=True, timeout=10) as r:
+                      cd = r.headers.get('content-disposition')
+                      if cd:
+                          fname = re.findall('filename="(.+?)"', cd)
+                          if fname: filename = unquote(fname[0])
+                      else:
+                          filename = Path(unquote(urlparse(r.url).path)).name or "video_stream"
+              except: pass
+              filename = sanitize(filename)
+              if not Path(filename).suffix: filename += ".mp4"
               return filename, final_url, cookies
 
-          # Proses Download
-          if ".m3u8" in VIDEO_URL.lower():
-              VIDEO_INPUT, IS_LOCAL = VIDEO_URL, False
-          else:
-              VIDEO_FILENAME, DL_URL, COOKIES = get_filename_and_url(VIDEO_URL)
-              VIDEO_INPUT, IS_LOCAL = VIDEO_FILENAME, True
-              c_str = "; ".join([f"{k}={v}" for k, v in COOKIES.items()])
-              cmd = ["aria2c", "-c", "-x", "16", "-s", "16", "-o", VIDEO_FILENAME, DL_URL]
-              if c_str: cmd.insert(1, f"--header=Cookie: {c_str}")
-              subprocess.run(cmd, check=True)
+          # Download logic
+          VIDEO_FILENAME, DL_URL, COOKIES = get_filename_and_url(VIDEO_URL)
+          VIDEO_INPUT, IS_LOCAL = VIDEO_FILENAME, True
+          c_str = "; ".join([f"{k}={v}" for k, v in COOKIES.items()])
+          cmd = ["aria2c", "-c", "-x", "16", "-s", "16", "-j", "5", "-o", VIDEO_FILENAME, DL_URL]
+          if c_str: cmd.insert(1, f"--header=Cookie: {c_str}")
+          subprocess.run(cmd, check=True)
+
+          def extract_subtitle_sample(rel_idx: int, seconds: int = 180) -> str:
+              tmp_path = f"/tmp/subsample_{rel_idx}.srt"
+              try:
+                  cmd = ["ffmpeg", "-y", "-loglevel", "error", "-ss", "300", "-i", VIDEO_INPUT, "-map", f"0:s:{rel_idx}", "-c:s", "srt", "-t", str(seconds), tmp_path]
+                  subprocess.run(cmd, check=True, timeout=40)
+                  with open(tmp_path, "r", encoding="utf-8", errors="ignore") as f: return f.read(15000)
+              except: return ""
+              finally:
+                  if os.path.exists(tmp_path): os.remove(tmp_path)
+
+          def detect_best_indonesian_subtitle(sub_streams):
+              best_idx, best_score, best_reason = -1, -999, "Tidak ditemukan"
+              for i, s in enumerate(sub_streams):
+                  tags = s.get("tags", {}) or {}
+                  lang, title, codec = (tags.get("language") or "").lower(), (tags.get("title") or "").lower(), (s.get("codec_name") or "").lower()
+                  score, reason_parts = 0, []
+                  if lang in ["ind", "id"]: score += 12; reason_parts.append("tag-lang")
+                  if "indo" in title: score += 10; reason_parts.append("title")
+                  if codec in TEXT_SUB_CODECS:
+                      c_score = score_indonesian_text(extract_subtitle_sample(i))
+                      if c_score > 0: score += c_score; reason_parts.append(f"AI:{c_score}")
+                  if score > best_score: best_score, best_idx, best_reason = score, i, ", ".join(reason_parts)
+              return (best_idx, best_reason, best_score) if best_score >= 6 else (-1, "Cek Manual", best_score)
 
           def get_stream_data():
               cmd = ["ffprobe", "-v", "quiet", "-print_format", "json", "-show_format", "-show_streams", VIDEO_INPUT]
               data = json.loads(subprocess.run(cmd, capture_output=True, text=True).stdout or "{}")
-              info = {"sub_rel_idx": -1, "res": "N/A", "dur": "N/A"}
+              info = {"sub_rel_idx": -1, "sub_codec": "", "sub_reason": "Nonaktif", "has_fonts": False, "res": "N/A", "dur": "00:00:00"}
               streams = data.get("streams", [])
               for s in streams:
                   if s.get("codec_type") == "video":
                       info["res"] = f"{s.get('width')}x{s.get('height')}"
-                  if USE_SUBTITLE and s.get("codec_type") == "subtitle":
-                      # Pilih track subtitle pertama jika ditemukan
-                      if info["sub_rel_idx"] == -1: info["sub_rel_idx"] = s.get("index")
+                  if s.get("codec_type") == "attachment": info["has_fonts"] = True
+              
               d_raw = data.get("format", {}).get("duration")
               if d_raw:
                   sec = int(float(d_raw))
                   info["dur"] = f"{sec//3600:02d}:{(sec%3600)//60:02d}:{sec%60:02d}"
+
+              sub_s = [s for s in streams if s.get("codec_type") == "subtitle"]
+              if USE_SUBTITLE and sub_s:
+                  idx, reason, _ = detect_best_indonesian_subtitle(sub_s)
+                  if idx != -1: info.update({"sub_rel_idx": idx, "sub_codec": sub_s[idx].get("codec_name", ""), "sub_reason": reason})
               return info
 
           async def main():
               info = get_stream_data()
+              font_path = None
+              if info["has_fonts"]:
+                  os.makedirs(FONTS_DIR, exist_ok=True)
+                  subprocess.run(["ffmpeg", "-dump_attachment:t", "", "-i", os.path.abspath(VIDEO_INPUT)], cwd=FONTS_DIR, stderr=subprocess.DEVNULL)
+                  font_path = os.path.abspath(FONTS_DIR)
+
               client = TelegramClient(StringSession(STRING_SESSION), API_ID, API_HASH)
               await client.connect()
               
-              # Dapatkan RTMP Telegram
-              ent = await client.get_entity(TARGET_CHAT)
-              try: await client(functions.phone.CreateGroupCallRequest(peer=ent, rtmp_stream=True))
-              except: pass
-              call = await client(functions.phone.GetGroupCallStreamRtmpUrlRequest(peer=ent, revoke=False))
-              rtmp = f"{call.url}{call.key}"
+              rtmp = CUSTOM_RTMP
+              if not rtmp:
+                  ent = await client.get_entity(TARGET_CHAT)
+                  try: await client(functions.phone.CreateGroupCallRequest(peer=ent, rtmp_stream=True))
+                  except: pass
+                  call = await client(functions.phone.GetGroupCallStreamRtmpUrlRequest(peer=ent, revoke=False))
+                  rtmp = f"{call.url}{call.key}"
 
-              await client.send_message(TARGET_CHAT, f"🎬 **Nobar Dimulai!**\n⏱ Durasi: `{info['dur']}`\n⚙️ Bitrate: `Otomatis (Dynamic)`")
+              sub_status = f"✅ Indonesia (Track {info['sub_rel_idx']})" if info['sub_rel_idx'] != -1 else "❌ Nonaktif"
+              msg = f"🎬 **STREAMING DIMULAI**\n🏷 **Judul:** `{VIDEO_FILENAME}`\n🎥 **Res:** `{info['res']}`\n⏱ **Durasi:** `{info['dur']}`\n💬 **Sub:** `{sub_status}`"
+              await client.send_message(TARGET_CHAT, msg)
               await client.disconnect()
 
-              # FFmpeg dengan Bitrate Otomatis (CRF)
+              # FFmpeg Command
               cmd = ["ffmpeg", "-re", "-i", VIDEO_INPUT]
+              f_complex, v_map = [], "0:v:0"
               
-              # Filter Resolusi & Subtitle
-              f_complex = []
-              v_map = "0:v:0"
               if QUALITY == "1080p":
                   f_complex.append("[0:v]scale=1920:-2[v_scaled]")
                   v_map = "[v_scaled]"
               
+              if info["sub_rel_idx"] != -1:
+                  if info["sub_codec"] in TEXT_SUB_CODECS:
+                      sc = f"subtitles='{ffmpeg_escape_filter_path(os.path.abspath(VIDEO_INPUT))}':si={info['sub_rel_idx']}"
+                      if font_path: sc += f":fontsdir='{ffmpeg_escape_filter_path(font_path)}'"
+                      f_complex.append(f"{v_map}{sc}[v_final]"); v_map = "[v_final]"
+                  else:
+                      f_complex.append(f"{v_map}[0:s:{info['sub_rel_idx']}]overlay[v_final]"); v_map = "[v_final]"
+
               if f_complex: cmd.extend(["-filter_complex", ";".join(f_complex)])
 
               cmd.extend([
-                  "-map", v_map, "-map", "0:a:0?",
-                  "-c:v", "libx264", 
-                  "-preset", "veryfast",
-                  "-crf", "23",            # Kualitas otomatis
-                  "-maxrate", "4000k",     # Batas atas biar gak lag
-                  "-bufsize", "8000k",
-                  "-pix_fmt", "yuv420p",
-                  "-g", "60",              # Penting untuk RTMP
-                  "-c:a", "aac", "-b:a", "128k", "-ac", "2", "-ar", "44100",
-                  "-f", "flv", rtmp
+                  "-map", v_map, 
+                  "-map", "0:a:0?", 
+                  "-c:v", "libx264", "-preset", "veryfast", "-b:v", "4000k", "-maxrate", "4000k", "-bufsize", "8000k",
+                  "-pix_fmt", "yuv420p", "-g", "60",
+                  "-c:a", "aac", 
+                  "-ac", "2",        # <--- Audio 2 Channel
+                  "-b:a", "128k", 
+                  "-ar", "44100", 
+                  "-f", "flv"        # <--- Format FLV
               ])
+              
+              if rtmp.startswith("rtmps://"): cmd.extend(["-tls_verify", "0"])
+              cmd.append(rtmp)
               
               subprocess.run(cmd)
 
