@@ -60,7 +60,7 @@ jobs:
           import requests
           from pathlib import Path
           from urllib.parse import urlparse, unquote
-          from telethon import TelegramClient, functions
+          from telethon import TelegramClient, functions, events
           from telethon.sessions import StringSession
 
           API_ID = int(os.environ.get("API_ID"))
@@ -131,6 +131,10 @@ jobs:
               if c_str: cmd.insert(1, f"--header=Cookie: {c_str}")
               subprocess.run(cmd, check=True)
 
+          current_proc = None
+          rtmp = ""
+          last_ts = "00:00:00"
+
           def get_stream_data():
               cmd = ["ffprobe", "-v", "quiet", "-print_format", "json", "-show_format", "-show_streams"]
               if custom_headers:
@@ -185,11 +189,30 @@ jobs:
                   subprocess.run(["ffmpeg", "-dump_attachment:t", "", "-i", os.path.abspath(VIDEO_INPUT)], cwd=FONTS_DIR, stderr=subprocess.DEVNULL)
                   font_path = os.path.abspath(FONTS_DIR)
 
+              global rtmp, current_proc, last_ts
               client = TelegramClient(StringSession(STRING_SESSION), API_ID, API_HASH)
               await client.connect()
+              ent = await client.get_entity(TARGET_CHAT)
+
+              @client.on(events.NewMessage(pattern=r'^/ulang', chats=[ent]))
+              async def handler(event):
+                  global rtmp, current_proc
+                  await event.reply("🔄 Mengulang streaming dan meminta Stream Key baru dari Telegram...")
+                  if not CUSTOM_RTMP:
+                      try:
+                          call = await client(functions.phone.GetGroupCallStreamRtmpUrlRequest(peer=ent, revoke=True))
+                          rtmp = f"{call.url}{call.key}"
+                      except Exception as e:
+                          await event.reply(f"❌ Gagal mereset Stream Key: {e}")
+                          return
+                  if current_proc:
+                      try:
+                          current_proc.terminate()
+                      except:
+                          pass
+
               rtmp = CUSTOM_RTMP
               if not rtmp:
-                  ent = await client.get_entity(TARGET_CHAT)
                   try: await client(functions.phone.CreateGroupCallRequest(peer=ent, title=VIDEO_FILENAME[:120], rtmp_stream=True))
                   except: pass
                   call = await client(functions.phone.GetGroupCallStreamRtmpUrlRequest(peer=ent, revoke=False))
@@ -204,12 +227,11 @@ jobs:
                   f"⏱ **Durasi:** `{info['dur']}`\n"
                   f"💬 **Subtitle:** `{sub_status}`\n"
                   f"⚙️ **Kualitas Output:** `{QUALITY}`\n\n"
-                  f"🍿 *Selamat menonton! Jangan lupa siapkan camilan.*"
+                  f"🍿 *Selamat menonton! Jangan lupa siapkan camilan.*\n"
+                  f"🔄 Ketik `/ulang` jika Telegram gagal memuat stream."
               )
               await client.send_message(TARGET_CHAT, pesan)
-              await client.disconnect()
 
-              last_ts = "00:00:00"
               while True:
                   vf = []
                   if QUALITY == "1080p": vf.append("scale=1920:-2")
@@ -238,13 +260,28 @@ jobs:
                       cmd.extend(["-tls_verify", "0"])
                   cmd.append(rtmp)
 
-                  proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, universal_newlines=True)
-                  for line in proc.stdout:
-                      t = re.search(r"time=(\d{2}:\d{2}:\d{2})", line)
+                  current_proc = await asyncio.create_subprocess_exec(
+                      *cmd,
+                      stdout=asyncio.subprocess.PIPE,
+                      stderr=asyncio.subprocess.STDOUT
+                  )
+
+                  while True:
+                      line = await current_proc.stdout.readline()
+                      if not line:
+                          break
+                      line_str = line.decode('utf-8', errors='ignore')
+                      t = re.search(r"time=(\d{2}:\d{2}:\d{2})", line_str)
                       if t: last_ts = t.group(1)
-                      if "frame=" in line: print(f"\rStreaming: {last_ts}", end="")
-                  if proc.wait() == 0: break
+                      if "frame=" in line_str: print(f"\rStreaming: {last_ts}", end="")
+
+                  await current_proc.wait()
+                  if current_proc.returncode == 0:
+                      break
+                  print("\n⚠️ Stream terputus atau diulang. Mencoba kembali dalam 5 detik...")
                   await asyncio.sleep(5)
+
+              await client.disconnect()
 
           if __name__ == '__main__':
               asyncio.run(main())
